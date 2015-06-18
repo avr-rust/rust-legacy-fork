@@ -29,6 +29,7 @@ mod builder;
 mod cabi;
 mod cabi_aarch64;
 mod cabi_arm;
+mod cabi_avr;
 mod cabi_mips;
 mod cabi_powerpc;
 mod cabi_x86;

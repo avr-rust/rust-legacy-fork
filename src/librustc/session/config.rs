@@ -674,6 +674,7 @@ pub fn build_target_config(opts: &Options, sp: &SpanHandler) -> Config {
     };
 
     let (int_type, uint_type) = match &target.target_pointer_width[..] {
+        "16" => (ast::TyI16, ast::TyU16),
         "32" => (ast::TyI32, ast::TyU32),
         "64" => (ast::TyI64, ast::TyU64),
         w    => sp.handler().fatal(&format!("target specification was invalid: unrecognized \

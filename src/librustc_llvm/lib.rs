@@ -2020,6 +2020,11 @@ extern {
     pub fn LLVMInitializeAArch64TargetMC();
     pub fn LLVMInitializeAArch64AsmPrinter();
     pub fn LLVMInitializeAArch64AsmParser();
+    pub fn LLVMInitializeAVRTargetInfo();
+    pub fn LLVMInitializeAVRTarget();
+    pub fn LLVMInitializeAVRTargetMC();
+    pub fn LLVMInitializeAVRAsmPrinter();
+    pub fn LLVMInitializeAVRAsmParser();
     pub fn LLVMInitializeMipsTargetInfo();
     pub fn LLVMInitializeMipsTarget();
     pub fn LLVMInitializeMipsTargetMC();

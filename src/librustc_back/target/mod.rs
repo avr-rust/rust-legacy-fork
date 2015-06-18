@@ -57,6 +57,7 @@ mod bitrig_base;
 mod dragonfly_base;
 mod freebsd_base;
 mod linux_base;
+mod none_base;
 mod openbsd_base;
 mod windows_base;
 mod windows_msvc_base;
@@ -79,7 +80,7 @@ pub struct Target {
     /// Environment name to use for conditional compilation.
     pub target_env: String,
     /// Architecture to use for ABI considerations. Valid options: "x86", "x86_64", "arm",
-    /// "aarch64", "mips", and "powerpc". "mips" includes "mipsel".
+    /// "aarch64", "avr", "mips", and "powerpc". "mips" includes "mipsel".
     pub arch: String,
     /// Optional settings with defaults.
     pub options: TargetOptions,
@@ -356,6 +357,7 @@ impl Target {
             arm_unknown_linux_gnueabi,
             arm_unknown_linux_gnueabihf,
             aarch64_unknown_linux_gnu,
+            avr_none,
             x86_64_unknown_linux_musl,
 
             arm_linux_androideabi,

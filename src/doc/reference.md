@@ -2007,7 +2007,7 @@ The following configurations must be defined by the implementation:
   production.  For example, it controls the behavior of the standard library's
   `debug_assert!` macro.
 * `target_arch = "..."`. Target CPU architecture, such as `"x86"`, `"x86_64"`
-  `"mips"`, `"powerpc"`, `"arm"`, or `"aarch64"`.
+  `"mips"`, `"powerpc"`, `"arm"`, `"aarch64"`, or `"avr"`.
 * `target_endian = "..."`. Endianness of the target CPU, either `"little"` or
   `"big"`.
 * `target_family = "..."`. Operating system family of the target, e. g.
@@ -2015,7 +2015,7 @@ The following configurations must be defined by the implementation:
   as a configuration itself, like `unix` or `windows`.
 * `target_os = "..."`. Operating system of the target, examples include
   `"windows"`, `"macos"`, `"ios"`, `"linux"`, `"android"`, `"freebsd"`, `"dragonfly"`,
-  `"bitrig"` or `"openbsd"`.
+  `"bitrig"`, `"openbsd"`, or `"none"``.
 * `target_pointer_width = "..."`. Target pointer width in bits. This is set
   to `"32"` for targets with 32-bit pointers, and likewise set to `"64"` for
   64-bit pointers.

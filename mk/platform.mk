@@ -207,7 +207,7 @@ define CFG_MAKE_TOOLCHAIN
         $$(CFG_GCCISH_DEF_FLAG_$(1))$$(3) $$(2) \
         $$(call CFG_INSTALL_NAME_$(1),$$(4))
 
-  ifeq ($$(findstring $(HOST_$(1)),arm aarch64 mips mipsel powerpc),)
+  ifeq ($$(findstring $(HOST_$(1)),arm aarch64 avr mips mipsel powerpc),)
 
   # On Bitrig, we need the relocation model to be PIC for everything
   ifeq (,$(filter $(OSTYPE_$(1)),bitrig))

@@ -200,6 +200,7 @@ pub unsafe fn record_sp_limit(limit: usize) {
     // openbsd - segmented stack is disabled
     #[cfg(any(target_arch = "aarch64",
               target_arch = "powerpc",
+              target_arch = "avr",
               all(target_arch = "arm", target_os = "ios"),
               target_os = "bitrig",
               target_os = "openbsd"))]
@@ -297,6 +298,7 @@ pub unsafe fn get_sp_limit() -> usize {
     // so it is unsafe to unreachable, let's return a fixed constant.
     #[cfg(any(target_arch = "aarch64",
               target_arch = "powerpc",
+              target_arch = "avr",
               all(target_arch = "arm", target_os = "ios"),
               target_os = "bitrig",
               target_os = "openbsd"))]

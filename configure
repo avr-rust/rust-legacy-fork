@@ -1196,7 +1196,7 @@ do
     make_dir $t/rt/compiler-rt
     for i in                                          \
       isaac sync test \
-      arch/i386 arch/x86_64 arch/arm arch/aarch64 arch/mips arch/powerpc
+      arch/i386 arch/x86_64 arch/arm arch/aarch64 arch/avr arch/mips arch/powerpc
     do
       make_dir $t/rt/stage$s/$i
     done
@@ -1401,7 +1401,7 @@ do
 
         msg "configuring LLVM for $gnu_t"
 
-        LLVM_TARGETS="--enable-targets=x86,x86_64,arm,aarch64,mips,powerpc"
+        LLVM_TARGETS="--enable-targets=x86,x86_64,arm,aarch64,avr,mips,powerpc"
         LLVM_BUILD="--build=$gnu_t"
         LLVM_HOST="--host=$gnu_t"
         LLVM_TARGET="--target=$gnu_t"
