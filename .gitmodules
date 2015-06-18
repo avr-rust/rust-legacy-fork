@@ -1,7 +1,3 @@
-[submodule "src/llvm"]
-	path = src/llvm
-	url = https://github.com/rust-lang/llvm.git
-	branch = master
 [submodule "src/compiler-rt"]
 	path = src/compiler-rt
 	url = https://github.com/rust-lang/compiler-rt.git
@@ -14,3 +10,6 @@
 [submodule "src/rust-installer"]
 	path = src/rust-installer
 	url = https://github.com/rust-lang/rust-installer
+[submodule "src/llvm"]
+	path = src/llvm
+	url = https://github.com/avr-llvm/llvm.git
