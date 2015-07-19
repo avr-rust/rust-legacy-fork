@@ -49,7 +49,7 @@
 # automatically generated for all stage/host/target combinations.
 ################################################################################
 
-TARGET_CRATES := libc flate arena term \
+TARGET_CRATES := libc std flate arena term \
                  serialize getopts collections test rand \
                  log graphviz core rbml alloc \
                  rustc_unicode rustc_bitflags

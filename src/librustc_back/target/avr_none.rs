@@ -12,11 +12,6 @@ use target::Target;
 
 pub fn target() -> Target {
     Target {
-        data_layout: "e-p:16:8:8\
-                      -i8:8:8-i16:8:8\
-                      -i32:8:8-i64:8:8\
-                      -f32:8:8\
-                      -f64:8:8-n8".to_string(),
         llvm_target: "avr-none".to_string(),
         target_endian: "little".to_string(),
         target_pointer_width: "16".to_string(),

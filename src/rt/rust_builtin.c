@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#if !defined(_WIN32) && !defined(__AVR)
+
 #include <stdint.h>
 #include <time.h>
 #include <string.h>
