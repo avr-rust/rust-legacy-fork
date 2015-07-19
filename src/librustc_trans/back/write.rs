@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use back::lto;
-use back::link::{get_cc_prog, remove};
+use back::link::{get_linker, remove};
 use session::config::{OutputFilenames, Passes, SomePasses, AllPasses};
 use session::Session;
 use session::config;
@@ -25,10 +25,8 @@ use syntax::diagnostic::{Emitter, Handler, Level};
 
 use std::ffi::{CStr, CString};
 use std::fs;
-use std::iter::Unfold;
 use std::mem;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::ptr;
 use std::str;
 use std::sync::{Arc, Mutex};
@@ -165,7 +163,7 @@ fn get_llvm_opt_level(optimize: config::OptLevel) -> llvm::CodeGenOptLevel {
     }
 }
 
-fn create_target_machine(sess: &Session) -> TargetMachineRef {
+pub fn create_target_machine(sess: &Session) -> TargetMachineRef {
     let reloc_model_arg = match sess.opts.cg.relocation_model {
         Some(ref s) => &s[..],
         None => &sess.target.target.options.relocation_model[..],
@@ -593,10 +591,6 @@ pub fn run_passes(sess: &Session,
     // Sanity check
     assert!(trans.modules.len() == sess.opts.cg.codegen_units);
 
-    unsafe {
-        configure_llvm(sess);
-    }
-
     let tm = create_target_machine(sess);
 
     // Figure out what we actually need to build.
@@ -619,6 +613,8 @@ pub fn run_passes(sess: &Session,
     // archive in order to allow LTO against it.
     let needs_crate_bitcode =
             sess.crate_types.borrow().contains(&config::CrateTypeRlib) &&
+            sess.opts.output_types.contains(&config::OutputTypeExe);
+    let needs_crate_object =
             sess.opts.output_types.contains(&config::OutputTypeExe);
     if needs_crate_bitcode {
         modules_config.emit_bc = true;
@@ -697,7 +693,8 @@ pub fn run_passes(sess: &Session,
         if sess.opts.cg.codegen_units == 1 {
             // 1) Only one codegen unit.  In this case it's no difficulty
             //    to copy `foo.0.x` to `foo.x`.
-            copy_gracefully(&crate_output.with_extension(ext), &crate_output.path(output_type));
+            copy_gracefully(&crate_output.with_extension(ext),
+                            &crate_output.path(output_type));
             if !sess.opts.cg.save_temps && !keep_numbered {
                 // The user just wants `foo.x`, not `foo.0.x`.
                 remove(sess, &crate_output.with_extension(ext));
@@ -716,78 +713,11 @@ pub fn run_passes(sess: &Session,
         }
     };
 
-    let link_obj = |output_path: &Path| {
-        // Running `ld -r` on a single input is kind of pointless.
-        if sess.opts.cg.codegen_units == 1 {
-            copy_gracefully(&crate_output.with_extension("0.o"), output_path);
-            // Leave the .0.o file around, to mimic the behavior of the normal
-            // code path.
-            return;
-        }
-
-        // Some builds of MinGW GCC will pass --force-exe-suffix to ld, which
-        // will automatically add a .exe extension if the extension is not
-        // already .exe or .dll.  To ensure consistent behavior on Windows, we
-        // add the .exe suffix explicitly and then rename the output file to
-        // the desired path.  This will give the correct behavior whether or
-        // not GCC adds --force-exe-suffix.
-        let windows_output_path =
-            if sess.target.target.options.is_like_windows {
-                Some(output_path.with_extension("o.exe"))
-            } else {
-                None
-            };
-
-        let pname = get_cc_prog(sess);
-        let mut cmd = Command::new(&pname[..]);
-
-        cmd.args(&sess.target.target.options.pre_link_args);
-        cmd.arg("-nostdlib");
-
-        for index in 0..trans.modules.len() {
-            cmd.arg(&crate_output.with_extension(&format!("{}.o", index)));
-        }
-
-        cmd.arg("-r").arg("-o")
-           .arg(windows_output_path.as_ref().map(|s| &**s).unwrap_or(output_path));
-
-        cmd.args(&sess.target.target.options.post_link_args);
-
-        if sess.opts.debugging_opts.print_link_args {
-            println!("{:?}", &cmd);
-        }
-
-        cmd.stdin(Stdio::null());
-        match cmd.status() {
-            Ok(status) => {
-                if !status.success() {
-                    sess.err(&format!("linking of {} with `{:?}` failed",
-                                     output_path.display(), cmd));
-                    sess.abort_if_errors();
-                }
-            },
-            Err(e) => {
-                sess.err(&format!("could not exec the linker `{}`: {}",
-                                 pname,
-                                 e));
-                sess.abort_if_errors();
-            },
-        }
-
-        match windows_output_path {
-            Some(ref windows_path) => {
-                fs::rename(windows_path, output_path).unwrap();
-            },
-            None => {
-                // The file is already named according to `output_path`.
-            }
-        }
-    };
-
     // Flag to indicate whether the user explicitly requested bitcode.
     // Otherwise, we produced it only as a temporary output, and will need
     // to get rid of it.
     let mut user_wants_bitcode = false;
+    let mut user_wants_objects = false;
     for output_type in output_types {
         match *output_type {
             config::OutputTypeBitcode => {
@@ -804,17 +734,10 @@ pub fn run_passes(sess: &Session,
                 copy_if_one_unit("0.s", config::OutputTypeAssembly, false);
             }
             config::OutputTypeObject => {
-                link_obj(&crate_output.path(config::OutputTypeObject));
+                user_wants_objects = true;
+                copy_if_one_unit("0.o", config::OutputTypeObject, true);
             }
-            config::OutputTypeExe => {
-                // If config::OutputTypeObject is already in the list, then
-                // `crate.o` will be handled by the config::OutputTypeObject case.
-                // Otherwise, we need to create the temporary object so we
-                // can run the linker.
-                if !sess.opts.output_types.contains(&config::OutputTypeObject) {
-                    link_obj(&crate_output.temp_path(config::OutputTypeObject));
-                }
-            }
+            config::OutputTypeExe |
             config::OutputTypeDepInfo => {}
         }
     }
@@ -851,15 +774,18 @@ pub fn run_passes(sess: &Session,
         let keep_numbered_bitcode = needs_crate_bitcode ||
                 (user_wants_bitcode && sess.opts.cg.codegen_units > 1);
 
+        let keep_numbered_objects = needs_crate_object ||
+                (user_wants_objects && sess.opts.cg.codegen_units > 1);
+
         for i in 0..trans.modules.len() {
-            if modules_config.emit_obj {
+            if modules_config.emit_obj && !keep_numbered_objects {
                 let ext = format!("{}.o", i);
-                remove(sess, &crate_output.with_extension(&ext[..]));
+                remove(sess, &crate_output.with_extension(&ext));
             }
 
             if modules_config.emit_bc && !keep_numbered_bitcode {
                 let ext = format!("{}.bc", i);
-                remove(sess, &crate_output.with_extension(&ext[..]));
+                remove(sess, &crate_output.with_extension(&ext));
             }
         }
 
@@ -913,11 +839,10 @@ fn run_work_singlethreaded(sess: &Session,
                            reachable: &[String],
                            work_items: Vec<WorkItem>) {
     let cgcx = CodegenContext::new_with_session(sess, reachable);
-    let mut work_items = work_items;
 
     // Since we're running single-threaded, we can pass the session to
     // the proc, allowing `optimize_and_codegen` to perform LTO.
-    for work in Unfold::new((), |_| work_items.pop()) {
+    for work in work_items.into_iter().rev() {
         execute_work_item(&cgcx, work);
     }
 }
@@ -988,8 +913,7 @@ fn run_work_multithreaded(sess: &Session,
 }
 
 pub fn run_assembler(sess: &Session, outputs: &OutputFilenames) {
-    let pname = get_cc_prog(sess);
-    let mut cmd = Command::new(&pname[..]);
+    let (pname, mut cmd) = get_linker(sess);
 
     cmd.arg("-c").arg("-o").arg(&outputs.path(config::OutputTypeObject))
                            .arg(&outputs.temp_path(config::OutputTypeAssembly));
@@ -1009,18 +933,13 @@ pub fn run_assembler(sess: &Session, outputs: &OutputFilenames) {
             }
         },
         Err(e) => {
-            sess.err(&format!("could not exec the linker `{}`: {}",
-                             pname,
-                             e));
+            sess.err(&format!("could not exec the linker `{}`: {}", pname, e));
             sess.abort_if_errors();
         }
     }
 }
 
-unsafe fn configure_llvm(sess: &Session) {
-    use std::sync::Once;
-    static INIT: Once = Once::new();
-
+pub unsafe fn configure_llvm(sess: &Session) {
     let mut llvm_c_strs = Vec::new();
     let mut llvm_args = Vec::new();
 
@@ -1042,52 +961,50 @@ unsafe fn configure_llvm(sess: &Session) {
         }
     }
 
-    INIT.call_once(|| {
-        llvm::LLVMInitializePasses();
+    llvm::LLVMInitializePasses();
 
-        // Only initialize the platforms supported by Rust here, because
-        // using --llvm-root will have multiple platforms that rustllvm
-        // doesn't actually link to and it's pointless to put target info
-        // into the registry that Rust cannot generate machine code for.
-        llvm::LLVMInitializeX86TargetInfo();
-        llvm::LLVMInitializeX86Target();
-        llvm::LLVMInitializeX86TargetMC();
-        llvm::LLVMInitializeX86AsmPrinter();
-        llvm::LLVMInitializeX86AsmParser();
+    // Only initialize the platforms supported by Rust here, because
+    // using --llvm-root will have multiple platforms that rustllvm
+    // doesn't actually link to and it's pointless to put target info
+    // into the registry that Rust cannot generate machine code for.
+    llvm::LLVMInitializeX86TargetInfo();
+    llvm::LLVMInitializeX86Target();
+    llvm::LLVMInitializeX86TargetMC();
+    llvm::LLVMInitializeX86AsmPrinter();
+    llvm::LLVMInitializeX86AsmParser();
 
-        llvm::LLVMInitializeARMTargetInfo();
-        llvm::LLVMInitializeARMTarget();
-        llvm::LLVMInitializeARMTargetMC();
-        llvm::LLVMInitializeARMAsmPrinter();
-        llvm::LLVMInitializeARMAsmParser();
+    llvm::LLVMInitializeARMTargetInfo();
+    llvm::LLVMInitializeARMTarget();
+    llvm::LLVMInitializeARMTargetMC();
+    llvm::LLVMInitializeARMAsmPrinter();
+    llvm::LLVMInitializeARMAsmParser();
 
-        llvm::LLVMInitializeAArch64TargetInfo();
-        llvm::LLVMInitializeAArch64Target();
-        llvm::LLVMInitializeAArch64TargetMC();
-        llvm::LLVMInitializeAArch64AsmPrinter();
-        llvm::LLVMInitializeAArch64AsmParser();
+    llvm::LLVMInitializeAArch64TargetInfo();
+    llvm::LLVMInitializeAArch64Target();
+    llvm::LLVMInitializeAArch64TargetMC();
+    llvm::LLVMInitializeAArch64AsmPrinter();
+    llvm::LLVMInitializeAArch64AsmParser();
 
-        llvm::LLVMInitializeAVRTargetInfo();
-        llvm::LLVMInitializeAVRTarget();
-        llvm::LLVMInitializeAVRTargetMC();
-        llvm::LLVMInitializeAVRAsmPrinter();
-        llvm::LLVMInitializeAVRAsmParser();
+    llvm::LLVMInitializeAVRTargetInfo();
+    llvm::LLVMInitializeAVRTarget();
+    llvm::LLVMInitializeAVRTargetMC();
+    llvm::LLVMInitializeAVRAsmPrinter();
+    llvm::LLVMInitializeAVRAsmParser();
 
-        llvm::LLVMInitializeMipsTargetInfo();
-        llvm::LLVMInitializeMipsTarget();
-        llvm::LLVMInitializeMipsTargetMC();
-        llvm::LLVMInitializeMipsAsmPrinter();
-        llvm::LLVMInitializeMipsAsmParser();
+    llvm::LLVMInitializeMipsTargetInfo();
+    llvm::LLVMInitializeMipsTarget();
+    llvm::LLVMInitializeMipsTargetMC();
+    llvm::LLVMInitializeMipsAsmPrinter();
+    llvm::LLVMInitializeMipsAsmParser();
 
-        llvm::LLVMInitializePowerPCTargetInfo();
-        llvm::LLVMInitializePowerPCTarget();
-        llvm::LLVMInitializePowerPCTargetMC();
-        llvm::LLVMInitializePowerPCAsmPrinter();
-        llvm::LLVMInitializePowerPCAsmParser();
+    llvm::LLVMInitializePowerPCTargetInfo();
+    llvm::LLVMInitializePowerPCTarget();
+    llvm::LLVMInitializePowerPCTargetMC();
+    llvm::LLVMInitializePowerPCAsmPrinter();
+    llvm::LLVMInitializePowerPCAsmParser();
 
-        llvm::LLVMRustSetLLVMOptions(llvm_args.len() as c_int,
-                                     llvm_args.as_ptr());
-    });
+    llvm::LLVMRustSetLLVMOptions(llvm_args.len() as c_int,
+                                 llvm_args.as_ptr());
 }
 
 unsafe fn populate_llvm_passes(fpm: llvm::PassManagerRef,

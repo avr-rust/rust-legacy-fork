@@ -101,8 +101,7 @@ use trans::cleanup::CleanupMethods;
 use trans::expr;
 use trans::tvec;
 use trans::type_of;
-use middle::ty::{self, Ty};
-use util::ppaux::ty_to_string;
+use middle::ty::Ty;
 
 use std::fmt;
 use syntax::ast;
@@ -606,17 +605,16 @@ impl<'tcx, K: KindOps + fmt::Debug> Datum<'tcx, K> {
          * affine values (since they must never be duplicated).
          */
 
-        assert!(!ty::type_moves_by_default(&ty::empty_parameter_environment(bcx.tcx()),
-                                           DUMMY_SP,
-                                           self.ty));
+        assert!(!self.ty
+                     .moves_by_default(&bcx.tcx().empty_parameter_environment(), DUMMY_SP));
         self.shallow_copy_raw(bcx, dst)
     }
 
     #[allow(dead_code)] // useful for debugging
     pub fn to_string<'a>(&self, ccx: &CrateContext<'a, 'tcx>) -> String {
-        format!("Datum({}, {}, {:?})",
+        format!("Datum({}, {:?}, {:?})",
                 ccx.tn().val_to_string(self.val),
-                ty_to_string(ccx.tcx(), self.ty),
+                self.ty,
                 self.kind)
     }
 
@@ -641,7 +639,7 @@ impl<'tcx, K: KindOps + fmt::Debug> Datum<'tcx, K> {
     }
 
     pub fn to_llbool<'blk>(self, bcx: Block<'blk, 'tcx>) -> ValueRef {
-        assert!(ty::type_is_bool(self.ty));
+        assert!(self.ty.is_bool());
         self.to_llscalarish(bcx)
     }
 }

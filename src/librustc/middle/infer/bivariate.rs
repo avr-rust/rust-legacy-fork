@@ -31,7 +31,6 @@ use super::type_variable::{BiTo};
 use middle::ty::{self, Ty};
 use middle::ty::TyVar;
 use middle::ty_relate::{Relate, RelateResult, TypeRelation};
-use util::ppaux::{Repr};
 
 pub struct Bivariate<'a, 'tcx: 'a> {
     fields: CombineFields<'a, 'tcx>
@@ -73,8 +72,8 @@ impl<'a, 'tcx> TypeRelation<'a, 'tcx> for Bivariate<'a, 'tcx> {
     }
 
     fn tys(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> RelateResult<'tcx, Ty<'tcx>> {
-        debug!("{}.tys({}, {})", self.tag(),
-               a.repr(self.fields.infcx.tcx), b.repr(self.fields.infcx.tcx));
+        debug!("{}.tys({:?}, {:?})", self.tag(),
+               a, b);
         if a == b { return Ok(a); }
 
         let infcx = self.fields.infcx;
@@ -110,8 +109,8 @@ impl<'a, 'tcx> TypeRelation<'a, 'tcx> for Bivariate<'a, 'tcx> {
                   -> RelateResult<'tcx, ty::Binder<T>>
         where T: Relate<'a,'tcx>
     {
-        let a1 = ty::erase_late_bound_regions(self.tcx(), a);
-        let b1 = ty::erase_late_bound_regions(self.tcx(), b);
+        let a1 = self.tcx().erase_late_bound_regions(a);
+        let b1 = self.tcx().erase_late_bound_regions(b);
         let c = try!(self.relate(&a1, &b1));
         Ok(ty::Binder(c))
     }

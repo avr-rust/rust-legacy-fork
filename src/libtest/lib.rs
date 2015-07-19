@@ -36,15 +36,15 @@
 
 #![feature(asm)]
 #![feature(box_syntax)]
-#![feature(collections)]
-#![feature(core)]
-#![feature(rustc_private)]
-#![feature(staged_api)]
-#![feature(std_misc)]
-#![feature(libc)]
-#![feature(set_stdio)]
 #![feature(duration)]
 #![feature(duration_span)]
+#![feature(fnbox)]
+#![feature(iter_cmp)]
+#![feature(libc)]
+#![feature(rt)]
+#![feature(rustc_private)]
+#![feature(set_stdio)]
+#![feature(staged_api)]
 
 extern crate getopts;
 extern crate serialize;
@@ -80,7 +80,6 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::thunk::Thunk;
 use std::time::Duration;
 
 // to be used by rustc to compile tests in libtest
@@ -153,7 +152,7 @@ pub enum TestFn {
     StaticTestFn(fn()),
     StaticBenchFn(fn(&mut Bencher)),
     StaticMetricFn(fn(&mut MetricMap)),
-    DynTestFn(Thunk<'static>),
+    DynTestFn(Box<FnBox() + Send>),
     DynMetricFn(Box<FnBox(&mut MetricMap)+Send>),
     DynBenchFn(Box<TDynBenchFn+'static>)
 }
@@ -359,7 +358,7 @@ Test Attributes:
 
 // Parses command line arguments into test options
 pub fn parse_opts(args: &[String]) -> Option<OptRes> {
-    let args_ = args.tail();
+    let args_ = &args[1..];
     let matches =
         match getopts::getopts(args_, &optgroups()) {
           Ok(m) => m,
@@ -872,7 +871,7 @@ fn run_tests<F>(opts: &TestOpts,
 
 #[allow(deprecated)]
 fn get_concurrency() -> usize {
-    match env::var("RUST_TEST_THREADS") {
+    return match env::var("RUST_TEST_THREADS") {
         Ok(s) => {
             let opt_n: Option<usize> = s.parse().ok();
             match opt_n {
@@ -884,10 +883,24 @@ fn get_concurrency() -> usize {
             if std::rt::util::limit_thread_creation_due_to_osx_and_valgrind() {
                 1
             } else {
-                extern { fn rust_get_num_cpus() -> libc::uintptr_t; }
-                unsafe { rust_get_num_cpus() as usize }
+                num_cpus()
             }
         }
+    };
+
+    #[cfg(windows)]
+    fn num_cpus() -> usize {
+        unsafe {
+            let mut sysinfo = std::mem::zeroed();
+            libc::GetSystemInfo(&mut sysinfo);
+            sysinfo.dwNumberOfProcessors as usize
+        }
+    }
+
+    #[cfg(unix)]
+    fn num_cpus() -> usize {
+        extern { fn rust_get_num_cpus() -> libc::uintptr_t; }
+        unsafe { rust_get_num_cpus() as usize }
     }
 }
 
@@ -959,7 +972,7 @@ pub fn run_test(opts: &TestOpts,
     fn run_test_inner(desc: TestDesc,
                       monitor_ch: Sender<MonitorMsg>,
                       nocapture: bool,
-                      testfn: Thunk<'static>) {
+                      testfn: Box<FnBox() + Send>) {
         struct Sink(Arc<Mutex<Vec<u8>>>);
         impl Write for Sink {
             fn write(&mut self, data: &[u8]) -> io::Result<usize> {
@@ -1066,7 +1079,7 @@ impl MetricMap {
             .map(|(k,v)| format!("{}: {} (+/- {})", *k,
                                  v.value, v.noise))
             .collect();
-        v.connect(", ")
+        v.join(", ")
     }
 }
 
@@ -1227,7 +1240,6 @@ mod tests {
                TestDesc, TestDescAndFn, TestOpts, run_test,
                MetricMap,
                StaticTestName, DynTestName, DynTestFn, ShouldPanic};
-    use std::thunk::Thunk;
     use std::sync::mpsc::channel;
 
     #[test]

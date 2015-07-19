@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![unstable(feature = "hashmap_hasher", reason = "hasher stuff is unclear")]
+
 use clone::Clone;
 use default::Default;
 use hash;
@@ -25,7 +27,6 @@ use marker;
 /// algorithm can implement the `Default` trait and create hash maps with the
 /// `DefaultState` structure. This state is 0-sized and will simply delegate
 /// to `Default` when asked to create a hasher.
-#[unstable(feature = "std_misc", reason = "hasher stuff is unclear")]
 pub trait HashState {
     /// Type of the hasher that will be created.
     type Hasher: hash::Hasher;
@@ -37,8 +38,7 @@ pub trait HashState {
 /// A structure which is a factory for instances of `Hasher` which implement the
 /// default trait.
 ///
-/// This struct has is 0-sized and does not need construction.
-#[unstable(feature = "std_misc", reason = "hasher stuff is unclear")]
+/// This struct is 0-sized and does not need construction.
 pub struct DefaultState<H>(marker::PhantomData<H>);
 
 impl<H: Default + hash::Hasher> HashState for DefaultState<H> {

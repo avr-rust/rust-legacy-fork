@@ -28,7 +28,8 @@ use rustc_unicode::str::Utf16Item;
 use borrow::{Cow, IntoCow};
 use range::RangeArgument;
 use str::{self, FromStr, Utf8Error, Chars};
-use vec::{DerefVec, Vec, as_vec};
+use vec::Vec;
+use boxed::Box;
 
 /// A growable string stored as a UTF-8 encoded buffer.
 #[derive(Clone, PartialOrd, Eq, Ord)]
@@ -317,9 +318,14 @@ impl String {
 
     /// Creates a new `String` from a length, capacity, and pointer.
     ///
-    /// This is unsafe because:
+    /// # Unsafety
     ///
-    /// * We call `Vec::from_raw_parts` to get a `Vec<u8>`;
+    /// This is _very_ unsafe because:
+    ///
+    /// * We call `Vec::from_raw_parts` to get a `Vec<u8>`. Therefore, this
+    ///   function inherits all of its unsafety, see [its
+    ///   documentation](../vec/struct.Vec.html#method.from_raw_parts)
+    ///   for the invariants it expects, they also apply to this function.
     /// * We assume that the `Vec` contains valid UTF-8.
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -696,7 +702,7 @@ impl String {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections_drain)]
+    /// # #![feature(drain)]
     ///
     /// let mut s = String::from("α is alpha, β is beta");
     /// let beta_offset = s.find('β').unwrap_or(s.len());
@@ -710,7 +716,7 @@ impl String {
     /// s.drain(..);
     /// assert_eq!(s, "");
     /// ```
-    #[unstable(feature = "collections_drain",
+    #[unstable(feature = "drain",
                reason = "recently added, matches RFC")]
     pub fn drain<R>(&mut self, range: R) -> Drain where R: RangeArgument<usize> {
         // Memory safety
@@ -735,6 +741,16 @@ impl String {
             iter: chars_iter,
             string: self_ptr,
         }
+    }
+
+    /// Converts the string into `Box<str>`.
+    ///
+    /// Note that this will drop any excess capacity.
+    #[unstable(feature = "box_str",
+               reason = "recently added, matches RFC")]
+    pub fn into_boxed_slice(self) -> Box<str> {
+        let slice = self.vec.into_boxed_slice();
+        unsafe { mem::transmute::<Box<[u8]>, Box<str>>(slice) }
     }
 }
 
@@ -963,6 +979,38 @@ impl ops::Index<ops::RangeFull> for String {
     }
 }
 
+#[cfg(not(stage0))]
+#[stable(feature = "derefmut_for_string", since = "1.2.0")]
+impl ops::IndexMut<ops::Range<usize>> for String {
+    #[inline]
+    fn index_mut(&mut self, index: ops::Range<usize>) -> &mut str {
+        &mut self[..][index]
+    }
+}
+#[cfg(not(stage0))]
+#[stable(feature = "derefmut_for_string", since = "1.2.0")]
+impl ops::IndexMut<ops::RangeTo<usize>> for String {
+    #[inline]
+    fn index_mut(&mut self, index: ops::RangeTo<usize>) -> &mut str {
+        &mut self[..][index]
+    }
+}
+#[cfg(not(stage0))]
+#[stable(feature = "derefmut_for_string", since = "1.2.0")]
+impl ops::IndexMut<ops::RangeFrom<usize>> for String {
+    #[inline]
+    fn index_mut(&mut self, index: ops::RangeFrom<usize>) -> &mut str {
+        &mut self[..][index]
+    }
+}
+#[stable(feature = "derefmut_for_string", since = "1.2.0")]
+impl ops::IndexMut<ops::RangeFull> for String {
+    #[inline]
+    fn index_mut(&mut self, _index: ops::RangeFull) -> &mut str {
+        unsafe { mem::transmute(&mut *self.vec) }
+    }
+}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl ops::Deref for String {
     type Target = str;
@@ -973,40 +1021,12 @@ impl ops::Deref for String {
     }
 }
 
-/// Wrapper type providing a `&String` reference via `Deref`.
-#[unstable(feature = "collections")]
-pub struct DerefString<'a> {
-    x: DerefVec<'a, u8>
-}
-
-impl<'a> Deref for DerefString<'a> {
-    type Target = String;
-
+#[stable(feature = "derefmut_for_string", since = "1.2.0")]
+impl ops::DerefMut for String {
     #[inline]
-    fn deref<'b>(&'b self) -> &'b String {
-        unsafe { mem::transmute(&*self.x) }
+    fn deref_mut(&mut self) -> &mut str {
+        unsafe { mem::transmute(&mut self.vec[..]) }
     }
-}
-
-/// Converts a string slice to a wrapper type providing a `&String` reference.
-///
-/// # Examples
-///
-/// ```
-/// # #![feature(collections)]
-/// use std::string::as_string;
-///
-/// // Let's pretend we have a function that requires `&String`
-/// fn string_consumer(s: &String) {
-///     assert_eq!(s, "foo");
-/// }
-///
-/// // Provide a `&String` from a `&str` without allocating
-/// string_consumer(&as_string("foo"));
-/// ```
-#[unstable(feature = "collections")]
-pub fn as_string<'a>(x: &'a str) -> DerefString<'a> {
-    DerefString { x: as_vec(x.as_bytes()) }
 }
 
 /// Error returned from `String::from`
@@ -1134,7 +1154,7 @@ impl fmt::Write for String {
 }
 
 /// A draining iterator for `String`.
-#[unstable(feature = "collections_drain", reason = "recently added")]
+#[unstable(feature = "drain", reason = "recently added")]
 pub struct Drain<'a> {
     /// Will be used as &'a mut String in the destructor
     string: *mut String,
@@ -1149,7 +1169,7 @@ pub struct Drain<'a> {
 unsafe impl<'a> Sync for Drain<'a> {}
 unsafe impl<'a> Send for Drain<'a> {}
 
-#[unstable(feature = "collections_drain", reason = "recently added")]
+#[unstable(feature = "drain", reason = "recently added")]
 impl<'a> Drop for Drain<'a> {
     fn drop(&mut self) {
         unsafe {
@@ -1163,7 +1183,7 @@ impl<'a> Drop for Drain<'a> {
     }
 }
 
-#[unstable(feature = "collections_drain", reason = "recently added")]
+#[unstable(feature = "drain", reason = "recently added")]
 impl<'a> Iterator for Drain<'a> {
     type Item = char;
 
@@ -1177,7 +1197,7 @@ impl<'a> Iterator for Drain<'a> {
     }
 }
 
-#[unstable(feature = "collections_drain", reason = "recently added")]
+#[unstable(feature = "drain", reason = "recently added")]
 impl<'a> DoubleEndedIterator for Drain<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<char> {

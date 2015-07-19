@@ -33,15 +33,15 @@
       html_root_url = "http://doc.rust-lang.org/nightly/")]
 
 #![feature(box_syntax)]
-#![feature(collections)]
-#![feature(core)]
-#![feature(rustc_private)]
-#![feature(staged_api)]
-#![feature(rand)]
-#![feature(path_ext)]
-#![feature(step_by)]
-#![feature(libc)]
 #![feature(fs_canonicalize)]
+#![feature(libc)]
+#![feature(path_ext)]
+#![feature(rand)]
+#![feature(rustc_private)]
+#![feature(slice_bytes)]
+#![feature(staged_api)]
+#![feature(step_by)]
+#![feature(vec_push_all)]
 #![cfg_attr(test, feature(test, rand))]
 
 extern crate syntax;
@@ -51,16 +51,8 @@ extern crate rustc_llvm;
 #[macro_use] extern crate log;
 
 pub mod abi;
-pub mod archive;
 pub mod tempdir;
-pub mod arm;
-pub mod avr;
-pub mod mips;
-pub mod mipsel;
 pub mod rpath;
 pub mod sha2;
 pub mod svh;
-pub mod target_strs;
-pub mod x86;
-pub mod x86_64;
 pub mod target;

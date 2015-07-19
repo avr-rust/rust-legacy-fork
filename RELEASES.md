@@ -1,20 +1,260 @@
-Version 1.1.0 (July 2015)
-========================
+Version 1.2.0 (August 2015)
+===========================
 
-* NNNN changes, numerous bugfixes
+* ~1200 changes, numerous bugfixes
+
+Highlights
+----------
+
+* [Dynamically-sized-type coercions][dst] allow smart pointer types
+  like `Rc` to contain types without a fixed size, arrays and trait
+  objects, finally enabling use of `Rc<[T]>` and completing the
+  implementation of DST.
+* [Parallel codegen][parcodegen] is now working again, which can
+  substantially speed up large builds in debug mode; It also gets
+  another ~33% speedup when bootstrapping on a 4 core machine (using 8
+  jobs). It's not enabled by default, but will be "in the near
+  future". It can be activated with the `-C codegen-units=N` flag to
+  `rustc`.
+
+Breaking Changes
+----------------
+
+* The [`to_uppercase`] and [`to_lowercase`] methods on `char` now do
+  unicode case mapping, which is a previously-planned change in
+  behavior and considered a bugfix.
+* [`mem::align_of`] now specifies [the *minimum alignment* for
+  T][align], which is usually the alignment programs are interested
+  in, and the same value reported by clang's
+  `alignof`. [`mem::min_align_of`] is deprecated. This is not known to
+  break real code.
+* [The `#[packed]` attribute is no longer silently accepted by the
+  compiler][packed]. This attribute did nothing and code that
+  mentioned it likely did not work as intended.
+
+Language
+--------
+
+* Patterns with `ref mut` now correctly invoke [`DerefMut`] when
+  matching against dereferencable values.
 
 Libraries
 ---------
 
-* The [`std::fs` module has been expanded][fs-expand] to expand the set of
+* The [`Extend`] trait, which grows a collection from an iterator, is
+  implemented over iterators of references, for `String`, `Vec`,
+  `LinkedList`, `VecDeque`, `EnumSet`, `BinaryHeap`, `VecMap`,
+  `BTreeSet` and `BTreeMap`. [RFC][extend-rfc].
+* The [`iter::once`] function returns an iterator that yields a single
+  element.
+* The [`iter::empty`] function returns an iterator that yields no
+  elements.
+* The [`matches`] and [`rmatches`] methods on `str` return iterators
+  over substring matches.
+* [`Cell`] and [`RefCell`] both implement [`Eq`].
+* A number of methods for wrapping arithmetic are added to the
+  integral types, [`wrapping_div`], [`wrapping_rem`],
+  [`wrapping_neg`], [`wrapping_shl`], [`wrapping_shr`]. These are in
+  addition to the existing [`wrapping_add`], [`wrapping_sub`], and
+  [`wrapping_mul`] methods, and alternatives to the [`Wrapping`]
+  type.. It is illegal for the default arithmetic operations in Rust
+  to overflow; the desire to wrap must be explicit.
+* The `{:#?}` formatting specifier [displays the alternate,
+  pretty-printed][debugfmt] form of the `Debug` formatter. This
+  feature was actually introduced prior to 1.0 with little
+  fanfare.
+* [`fmt::Formatter`] implements [`fmt::Write`], a `fmt`-specific trait
+  for writing data to formatted strings, similar to [`io::Write`].
+* [`fmt::Formatter`] adds 'debug builder' methods, [`debug_struct`],
+  [`debug_tuple`], [`debug_list`], [`debug_set`], [`debug_map`]. These
+  are used by code generators to emit implementations of [`Debug`].
+* `str` has new [`to_uppercase`][strup] and [`to_lowercase`][strlow]
+  methods that convert case, following Unicode case mapping.
+* It is now easier to handle to poisoned locks. The [`PoisonError`]
+  type, returned by failing lock operations, exposes `into_inner`,
+  `get_ref`, and `get_mut`, which all give access to the inner lock
+  guard, and allow the poisoned lock to continue to operate. The
+  `is_poisoned` method of [`RwLock`] and [`Mutex`] can poll for a
+  poisoned lock without attempting to take the lock.
+* On Unix the [`FromRawFd`] trait is implemented for [`Stdio`], and
+  [`AsRawFd`] for [`ChildStdin`], [`ChildStdout`], [`ChildStderr`].
+  On Windows the `FromRawHandle` trait is implemented for `Stdio`,
+  and `AsRawHandle` for `ChildStdin`, `ChildStdout`,
+  `ChildStderr`.
+* [`io::ErrorKind`] has a new variant, `InvalidData`, which indicates
+  malformed input.
+
+Misc
+----
+
+* `rustc` employs smarter heuristics for guessing at [typos].
+* `rustc` emits more efficient code for [no-op conversions between
+  unsafe pointers][nop].
+* Fat pointers are now [passed in pairs of immediate arguments][fat],
+  resulting in faster compile times and smaller code.
+
+[`Extend`]: http://doc.rust-lang.org/nightly/std/iter/trait.Extend.html
+[extend-rfc]: https://github.com/rust-lang/rfcs/blob/master/text/0839-embrace-extend-extinguish.md
+[`iter::once`]: http://doc.rust-lang.org/nightly/std/iter/fn.once.html
+[`iter::empty`]: http://doc.rust-lang.org/nightly/std/iter/fn.empty.html
+[`matches`]: http://doc.rust-lang.org/nightly/std/primitive.str.html#method.matches
+[`rmatches`]: http://doc.rust-lang.org/nightly/std/primitive.str.html#method.rmatches
+[`Cell`]: http://doc.rust-lang.org/nightly/std/cell/struct.Cell.html
+[`RefCell`]: http://doc.rust-lang.org/nightly/std/cell/struct.RefCell.html
+[`wrapping_add`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_add
+[`wrapping_sub`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_sub
+[`wrapping_mul`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_mul
+[`wrapping_div`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_div
+[`wrapping_rem`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_rem
+[`wrapping_neg`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_neg
+[`wrapping_shl`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_shl
+[`wrapping_shr`]: http://doc.rust-lang.org/nightly/std/primitive.i8.html#method.wrapping_shr
+[`Wrapping`]: http://doc.rust-lang.org/nightly/std/num/struct.Wrapping.html
+[`fmt::Formatter`]: http://doc.rust-lang.org/nightly/std/fmt/struct.Formatter.html
+[`fmt::Write`]: http://doc.rust-lang.org/nightly/std/fmt/trait.Write.html
+[`io::Write`]: http://doc.rust-lang.org/nightly/std/io/trait.Write.html
+[`debug_struct`]: http://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html#method.debug_struct
+[`debug_tuple`]: http://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html#method.debug_tuple
+[`debug_list`]: http://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html#method.debug_list
+[`debug_set`]: http://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html#method.debug_set
+[`debug_map`]: http://doc.rust-lang.org/nightly/core/fmt/struct.Formatter.html#method.debug_map
+[`Debug`]: http://doc.rust-lang.org/nightly/std/fmt/trait.Debug.html
+[strup]: http://doc.rust-lang.org/nightly/std/primitive.str.html#method.to_uppercase
+[strlow]: http://doc.rust-lang.org/nightly/std/primitive.str.html#method.to_lowercase
+[`to_uppercase`]: http://doc.rust-lang.org/nightly/std/primitive.char.html#method.to_uppercase
+[`to_lowercase`]: http://doc.rust-lang.org/nightly/std/primitive.char.html#method.to_lowercase
+[`PoisonError`]: http://doc.rust-lang.org/nightly/std/sync/struct.PoisonError.html
+[`RwLock`]: http://doc.rust-lang.org/nightly/std/sync/struct.RwLock.html
+[`Mutex`]: http://doc.rust-lang.org/nightly/std/sync/struct.Mutex.html
+[`FromRawFd`]: http://doc.rust-lang.org/nightly/std/os/unix/io/trait.FromRawFd.html
+[`AsRawFd`]: http://doc.rust-lang.org/nightly/std/os/unix/io/trait.AsRawFd.html
+[`Stdio`]: http://doc.rust-lang.org/nightly/std/process/struct.Stdio.html
+[`ChildStdin`]: http://doc.rust-lang.org/nightly/std/process/struct.ChildStdin.html
+[`ChildStdout`]: http://doc.rust-lang.org/nightly/std/process/struct.ChildStdout.html
+[`ChildStderr`]: http://doc.rust-lang.org/nightly/std/process/struct.ChildStderr.html
+[`io::ErrorKind`]: http://doc.rust-lang.org/nightly/std/io/enum.ErrorKind.html
+[debugfmt]: https://www.reddit.com/r/rust/comments/3ceaui/psa_produces_prettyprinted_debug_output/
+[`DerefMut`]: http://doc.rust-lang.org/nightly/std/ops/trait.DerefMut.html
+[`mem::align_of`]: http://doc.rust-lang.org/nightly/std/mem/fn.align_of.html
+[align]: https://github.com/rust-lang/rust/pull/25646
+[`mem::min_align_of`]: http://doc.rust-lang.org/nightly/std/mem/fn.min_align_of.html
+[typos]: https://github.com/rust-lang/rust/pull/26087
+[nop]: https://github.com/rust-lang/rust/pull/26336
+[fat]: https://github.com/rust-lang/rust/pull/26411
+[dst]: https://github.com/rust-lang/rfcs/blob/master/text/0982-dst-coercion.md
+[parcodegen]: https://github.com/rust-lang/rust/pull/26018
+[packed]: https://github.com/rust-lang/rust/pull/25541
+
+Version 1.1.0 (June 2015)
+=========================
+
+* ~850 changes, numerous bugfixes
+
+Highlights
+----------
+
+* The [`std::fs` module has been expanded][fs] to expand the set of
   functionality exposed:
   * `DirEntry` now supports optimizations like `file_type` and `metadata` which
     don't incur a syscall on some platforms.
   * A `symlink_metadata` function has been added.
   * The `fs::Metadata` structure now lowers to its OS counterpart, providing
     access to all underlying information.
+* The compiler now contains extended explanations of many errors. When an error
+  with an explanation occurs the compiler suggests using the `--explain` flag
+  to read the explanation. Error explanations are also [available online][err-index].
+* Thanks to multiple [improvements][sk] to [type checking][pre], as
+  well as other work, the time to bootstrap the compiler decreased by
+  32%.
 
-[fs-expand]: https://github.com/rust-lang/rust/pull/25844
+Libraries
+---------
+
+* The [`str::split_whitespace`] method splits a string on unicode
+  whitespace boundaries.
+* On both Windows and Unix, new extension traits provide conversion of
+  I/O types to and from the underlying system handles. On Unix, these
+  traits are [`FromRawFd`] and [`AsRawFd`], on Windows `FromRawHandle`
+  and `AsRawHandle`. These are implemented for `File`, `TcpStream`,
+  `TcpListener`, and `UpdSocket`. Further implementations for
+  `std::process` will be stabilized later.
+* On Unix, [`std::os::unix::symlink`] creates symlinks. On
+  Windows, symlinks can be created with
+  `std::os::windows::symlink_dir` and
+  `std::os::windows::symlink_file`.
+* The `mpsc::Receiver` type can now be converted into an iterator with
+  `into_iter` on the [`IntoIterator`] trait.
+* `Ipv4Addr` can be created from `u32` with the `From<u32>`
+  implementation of the [`From`] trait.
+* The `Debug` implementation for `RangeFull` [creates output that is
+  more consistent with other implementations][rf].
+* [`Debug` is implemented for `File`][file].
+* The `Default` implementation for `Arc` [no longer requires `Sync +
+  Send`][arc].
+* [The `Iterator` methods `count`, `nth`, and `last` have been
+  overridden for slices to have O(1) performance instead of O(n)][si].
+* Incorrect handling of paths on Windows has been improved in both the
+  compiler and the standard library.
+* [`AtomicPtr` gained a `Default` implementation][ap].
+* In accordance with Rust's policy on arithmetic overflow `abs` now
+  [panics on overflow when debug assertions are enabled][abs].
+* The [`Cloned`] iterator, which was accidentally left unstable for
+  1.0 [has been stabilized][c].
+* The [`Incoming`] iterator, which iterates over incoming TCP
+  connections, and which was accidentally unnamable in 1.0, [is now
+  properly exported][inc].
+* [`BinaryHeap`] no longer corrupts itself [when functions called by
+  `sift_up` or `sift_down` panic][bh].
+* The [`split_off`] method of `LinkedList` [no longer corrupts
+  the list in certain scenarios][ll].
+
+Misc
+----
+
+* Type checking performance [has improved notably][sk] with
+  [multiple improvements][pre].
+* The compiler [suggests code changes][ch] for more errors.
+* rustc and it's build system have experimental support for [building
+  toolchains against MUSL][m] instead of glibc on Linux.
+* The compiler defines the `target_env` cfg value, which is used for
+  distinguishing toolchains that are otherwise for the same
+  platform. Presently this is set to `gnu` for common GNU Linux
+  targets and for MinGW targets, and `musl` for MUSL Linux targets.
+* The [`cargo rustc`][crc] command invokes a build with custom flags
+  to rustc.
+* [Android executables are always position independent][pie].
+* [The `drop_with_repr_extern` lint warns about mixing `repr(C)`
+  with `Drop`][drop].
+
+[`str::split_whitespace`]: http://doc.rust-lang.org/nightly/std/primitive.str.html#method.split_whitespace
+[`FromRawFd`]: http://doc.rust-lang.org/nightly/std/os/unix/io/trait.FromRawFd.html
+[`AsRawFd`]: http://doc.rust-lang.org/nightly/std/os/unix/io/trait.AsRawFd.html
+[`std::os::unix::symlink`]: http://doc.rust-lang.org/nightly/std/os/unix/fs/fn.symlink.html
+[`IntoIterator`]: http://doc.rust-lang.org/nightly/std/iter/trait.IntoIterator.html
+[`From`]: http://doc.rust-lang.org/nightly/std/convert/trait.From.html
+[rf]: https://github.com/rust-lang/rust/pull/24491
+[err-index]: http://doc.rust-lang.org/error-index.html
+[sk]: https://github.com/rust-lang/rust/pull/24615
+[pre]: https://github.com/rust-lang/rust/pull/25323
+[file]: https://github.com/rust-lang/rust/pull/24598
+[ch]: https://github.com/rust-lang/rust/pull/24683
+[arc]: https://github.com/rust-lang/rust/pull/24695
+[si]: https://github.com/rust-lang/rust/pull/24701
+[ap]: https://github.com/rust-lang/rust/pull/24834
+[m]: https://github.com/rust-lang/rust/pull/24777
+[fs]: https://github.com/rust-lang/rfcs/blob/master/text/1044-io-fs-2.1.md
+[crc]: https://github.com/rust-lang/cargo/pull/1568
+[pie]: https://github.com/rust-lang/rust/pull/24953
+[abs]: https://github.com/rust-lang/rust/pull/25441
+[c]: https://github.com/rust-lang/rust/pull/25496
+[`Cloned`]: http://doc.rust-lang.org/nightly/std/iter/struct.Cloned.html
+[`Incoming`]: http://doc.rust-lang.org/nightly/std/net/struct.Incoming.html
+[inc]: https://github.com/rust-lang/rust/pull/25522
+[bh]: https://github.com/rust-lang/rust/pull/25856
+[`BinaryHeap`]: http://doc.rust-lang.org/nightly/std/collections/struct.BinaryHeap.html
+[ll]: https://github.com/rust-lang/rust/pull/26022
+[`split_off`]: http://doc.rust-lang.org/nightly/collections/linked_list/struct.LinkedList.html#method.split_off
+[drop]: https://github.com/rust-lang/rust/pull/24935
 
 Version 1.0.0 (May 2015)
 ========================
@@ -156,7 +396,6 @@ Misc
 [sw]: https://github.com/rust-lang/rfcs/blob/master/text/1054-str-words.md
 [th]: https://github.com/rust-lang/rfcs/blob/master/text/0909-move-thread-local-to-std-thread.md
 [send-rfc]: https://github.com/rust-lang/rfcs/blob/master/text/0458-send-improvements.md
-[scoped]: http://static.rust-lang.org/doc/master/std/thread/fn.scoped.html
 [moar-ufcs]: https://github.com/rust-lang/rust/pull/22172
 [prim-inherent]: https://github.com/rust-lang/rust/pull/23104
 [overflow]: https://github.com/rust-lang/rfcs/blob/master/text/0560-integer-overflow.md
@@ -166,12 +405,10 @@ Misc
 [string-pattern]: https://github.com/rust-lang/rust/pull/22466
 [oibit-final]: https://github.com/rust-lang/rust/pull/21689
 [reflect]: https://github.com/rust-lang/rust/pull/23712
-[debug-builder]: https://github.com/rust-lang/rfcs/blob/master/text/0640-debug-improvements.md
 [conversion]: https://github.com/rust-lang/rfcs/pull/529
 [num-traits]: https://github.com/rust-lang/rust/pull/23549
 [index-value]: https://github.com/rust-lang/rust/pull/23601
 [dropck]: https://github.com/rust-lang/rfcs/pull/769
-[fundamental]: https://github.com/rust-lang/rfcs/pull/1023
 [ci-compare]: https://gist.github.com/brson/a30a77836fbec057cbee
 [fn-inherit]: https://github.com/rust-lang/rust/pull/23282
 [fn-blanket]: https://github.com/rust-lang/rust/pull/23895
@@ -274,7 +511,6 @@ Version 1.0.0-alpha.2 (February 2015)
 [osstr]: https://github.com/rust-lang/rust/pull/21488
 [osstr-rfc]: https://github.com/rust-lang/rfcs/blob/master/text/0517-io-os-reform.md
 [Self]: https://github.com/rust-lang/rust/pull/22158
-[ufcs]: https://github.com/rust-lang/rust/pull/21077
 [ufcs-rfc]: https://github.com/rust-lang/rfcs/blob/master/text/0132-ufcs.md
 [un]: https://github.com/rust-lang/rust/pull/22256
 

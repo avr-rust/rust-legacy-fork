@@ -10,8 +10,6 @@
 
 use llvm;
 use llvm::{ContextRef, ModuleRef, ValueRef, BuilderRef};
-use llvm::TargetData;
-use llvm::mk_target_data;
 use metadata::common::LinkMeta;
 use middle::def::ExportMap;
 use middle::traits;
@@ -28,7 +26,6 @@ use middle::subst::Substs;
 use middle::ty::{self, Ty};
 use session::config::NoDebugInfo;
 use session::Session;
-use util::ppaux::Repr;
 use util::sha2::Sha256;
 use util::nodemap::{NodeMap, NodeSet, DefIdMap, FnvHashMap, FnvHashSet};
 
@@ -57,7 +54,7 @@ pub struct Stats {
 /// per crate.  The data here is shared between all compilation units of the
 /// crate, so it must not contain references to any LLVM data structures
 /// (aside from metadata-related ones).
-pub struct SharedCrateContext<'tcx> {
+pub struct SharedCrateContext<'a, 'tcx: 'a> {
     local_ccxs: Vec<LocalCrateContext<'tcx>>,
 
     metadata_llmod: ModuleRef,
@@ -68,7 +65,7 @@ pub struct SharedCrateContext<'tcx> {
     item_symbols: RefCell<NodeMap<String>>,
     link_meta: LinkMeta,
     symbol_hasher: RefCell<Sha256>,
-    tcx: ty::ctxt<'tcx>,
+    tcx: &'a ty::ctxt<'tcx>,
     stats: Stats,
     check_overflow: bool,
     check_drop_flag_for_sanity: bool,
@@ -84,7 +81,6 @@ pub struct SharedCrateContext<'tcx> {
 pub struct LocalCrateContext<'tcx> {
     llmod: ModuleRef,
     llcx: ContextRef,
-    td: TargetData,
     tn: TypeNames,
     externs: RefCell<ExternMap>,
     item_vals: RefCell<NodeMap<ValueRef>>,
@@ -159,7 +155,7 @@ pub struct LocalCrateContext<'tcx> {
 }
 
 pub struct CrateContext<'a, 'tcx: 'a> {
-    shared: &'a SharedCrateContext<'tcx>,
+    shared: &'a SharedCrateContext<'a, 'tcx>,
     local: &'a LocalCrateContext<'tcx>,
     /// The index of `local` in `shared.local_ccxs`.  This is used in
     /// `maybe_iter(true)` to identify the original `LocalCrateContext`.
@@ -167,7 +163,7 @@ pub struct CrateContext<'a, 'tcx: 'a> {
 }
 
 pub struct CrateContextIterator<'a, 'tcx: 'a> {
-    shared: &'a SharedCrateContext<'tcx>,
+    shared: &'a SharedCrateContext<'a, 'tcx>,
     index: usize,
 }
 
@@ -192,7 +188,7 @@ impl<'a, 'tcx> Iterator for CrateContextIterator<'a,'tcx> {
 
 /// The iterator produced by `CrateContext::maybe_iter`.
 pub struct CrateContextMaybeIterator<'a, 'tcx: 'a> {
-    shared: &'a SharedCrateContext<'tcx>,
+    shared: &'a SharedCrateContext<'a, 'tcx>,
     index: usize,
     single: bool,
     origin: usize,
@@ -227,9 +223,15 @@ unsafe fn create_context_and_module(sess: &Session, mod_name: &str) -> (ContextR
     let mod_name = CString::new(mod_name).unwrap();
     let llmod = llvm::LLVMModuleCreateWithNameInContext(mod_name.as_ptr(), llcx);
 
-    let data_layout = sess.target.target.data_layout.as_bytes();
-    let data_layout = CString::new(data_layout).unwrap();
-    llvm::LLVMSetDataLayout(llmod, data_layout.as_ptr());
+    let custom_data_layout = &sess.target.target.options.data_layout[..];
+    if custom_data_layout.len() > 0 {
+        let data_layout = CString::new(custom_data_layout).unwrap();
+        llvm::LLVMSetDataLayout(llmod, data_layout.as_ptr());
+    } else {
+        let tm = ::back::write::create_target_machine(sess);
+        llvm::LLVMRustSetDataLayoutFromTargetMachine(llmod, tm);
+        llvm::LLVMRustDisposeTargetMachine(tm);
+    }
 
     let llvm_target = sess.target.target.llvm_target.as_bytes();
     let llvm_target = CString::new(llvm_target).unwrap();
@@ -237,17 +239,17 @@ unsafe fn create_context_and_module(sess: &Session, mod_name: &str) -> (ContextR
     (llcx, llmod)
 }
 
-impl<'tcx> SharedCrateContext<'tcx> {
+impl<'b, 'tcx> SharedCrateContext<'b, 'tcx> {
     pub fn new(crate_name: &str,
                local_count: usize,
-               tcx: ty::ctxt<'tcx>,
+               tcx: &'b ty::ctxt<'tcx>,
                export_map: ExportMap,
                symbol_hasher: Sha256,
                link_meta: LinkMeta,
                reachable: NodeSet,
                check_overflow: bool,
                check_drop_flag_for_sanity: bool)
-               -> SharedCrateContext<'tcx> {
+               -> SharedCrateContext<'b, 'tcx> {
         let (metadata_llcx, metadata_llmod) = unsafe {
             create_context_and_module(&tcx.sess, "metadata")
         };
@@ -397,10 +399,6 @@ impl<'tcx> SharedCrateContext<'tcx> {
     }
 
     pub fn tcx<'a>(&'a self) -> &'a ty::ctxt<'tcx> {
-        &self.tcx
-    }
-
-    pub fn take_tcx(self) -> ty::ctxt<'tcx> {
         self.tcx
     }
 
@@ -418,18 +416,11 @@ impl<'tcx> SharedCrateContext<'tcx> {
 }
 
 impl<'tcx> LocalCrateContext<'tcx> {
-    fn new(shared: &SharedCrateContext<'tcx>,
+    fn new<'a>(shared: &SharedCrateContext<'a, 'tcx>,
            name: &str)
            -> LocalCrateContext<'tcx> {
         unsafe {
             let (llcx, llmod) = create_context_and_module(&shared.tcx.sess, name);
-
-            let td = mk_target_data(&shared.tcx
-                                          .sess
-                                          .target
-                                          .target
-                                          .data_layout
-                                          );
 
             let dbg_cx = if shared.tcx.sess.opts.debuginfo != NoDebugInfo {
                 Some(debuginfo::CrateDebugContext::new(llmod))
@@ -440,7 +431,6 @@ impl<'tcx> LocalCrateContext<'tcx> {
             let mut local_ccx = LocalCrateContext {
                 llmod: llmod,
                 llcx: llcx,
-                td: td,
                 tn: TypeNames::new(),
                 externs: RefCell::new(FnvHashMap()),
                 item_vals: RefCell::new(NodeMap()),
@@ -505,7 +495,7 @@ impl<'tcx> LocalCrateContext<'tcx> {
     /// This is used in the `LocalCrateContext` constructor to allow calling
     /// functions that expect a complete `CrateContext`, even before the local
     /// portion is fully initialized and attached to the `SharedCrateContext`.
-    fn dummy_ccx<'a>(&'a self, shared: &'a SharedCrateContext<'tcx>)
+    fn dummy_ccx<'a>(&'a self, shared: &'a SharedCrateContext<'a, 'tcx>)
                      -> CrateContext<'a, 'tcx> {
         CrateContext {
             shared: shared,
@@ -516,7 +506,7 @@ impl<'tcx> LocalCrateContext<'tcx> {
 }
 
 impl<'b, 'tcx> CrateContext<'b, 'tcx> {
-    pub fn shared(&self) -> &'b SharedCrateContext<'tcx> {
+    pub fn shared(&self) -> &'b SharedCrateContext<'b, 'tcx> {
         self.shared
     }
 
@@ -548,7 +538,7 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
 
 
     pub fn tcx<'a>(&'a self) -> &'a ty::ctxt<'tcx> {
-        &self.shared.tcx
+        self.shared.tcx
     }
 
     pub fn sess<'a>(&'a self) -> &'a Session {
@@ -586,8 +576,8 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
         self.local.llcx
     }
 
-    pub fn td<'a>(&'a self) -> &'a TargetData {
-        &self.local.td
+    pub fn td(&self) -> llvm::TargetDataRef {
+        unsafe { llvm::LLVMRustGetModuleDataLayout(self.llmod()) }
     }
 
     pub fn tn<'a>(&'a self) -> &'a TypeNames {
@@ -770,8 +760,8 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
 
     pub fn report_overbig_object(&self, obj: Ty<'tcx>) -> ! {
         self.sess().fatal(
-            &format!("the type `{}` is too big for the current architecture",
-                    obj.repr(self.tcx())))
+            &format!("the type `{:?}` is too big for the current architecture",
+                    obj))
     }
 
     pub fn check_overflow(&self) -> bool {
@@ -796,7 +786,7 @@ fn declare_intrinsic(ccx: &CrateContext, key: & &'static str) -> Option<ValueRef
         ($name:expr, fn() -> $ret:expr) => (
             if *key == $name {
                 let f = declare::declare_cfn(ccx, $name, Type::func(&[], &$ret),
-                                             ty::mk_nil(ccx.tcx()));
+                                             ccx.tcx().mk_nil());
                 ccx.intrinsics().borrow_mut().insert($name, f.clone());
                 return Some(f);
             }
@@ -804,7 +794,7 @@ fn declare_intrinsic(ccx: &CrateContext, key: & &'static str) -> Option<ValueRef
         ($name:expr, fn($($arg:expr),*) -> $ret:expr) => (
             if *key == $name {
                 let f = declare::declare_cfn(ccx, $name, Type::func(&[$($arg),*], &$ret),
-                                             ty::mk_nil(ccx.tcx()));
+                                             ccx.tcx().mk_nil());
                 ccx.intrinsics().borrow_mut().insert($name, f.clone());
                 return Some(f);
             }
@@ -944,7 +934,7 @@ fn declare_intrinsic(ccx: &CrateContext, key: & &'static str) -> Option<ValueRef
             } else if *key == $name {
                 let f = declare::declare_cfn(ccx, stringify!($cname),
                                              Type::func(&[$($arg),*], &void),
-                                             ty::mk_nil(ccx.tcx()));
+                                             ccx.tcx().mk_nil());
                 llvm::SetLinkage(f, llvm::InternalLinkage);
 
                 let bld = ccx.builder();
@@ -967,7 +957,7 @@ fn declare_intrinsic(ccx: &CrateContext, key: & &'static str) -> Option<ValueRef
             } else if *key == $name {
                 let f = declare::declare_cfn(ccx, stringify!($cname),
                                              Type::func(&[$($arg),*], &$ret),
-                                             ty::mk_nil(ccx.tcx()));
+                                             ccx.tcx().mk_nil());
                 ccx.intrinsics().borrow_mut().insert($name, f.clone());
                 return Some(f);
             }

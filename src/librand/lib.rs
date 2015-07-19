@@ -29,11 +29,15 @@
 #![unstable(feature = "rand",
             reason = "use `rand` from crates.io")]
 #![feature(core)]
+#![feature(core_float)]
+#![feature(core_prelude)]
+#![feature(core_slice_ext)]
 #![feature(no_std)]
+#![feature(num_bits_bytes)]
 #![feature(staged_api)]
 #![feature(step_by)]
 
-#![cfg_attr(test, feature(test, rand, rustc_private))]
+#![cfg_attr(test, feature(test, rand, rustc_private, iter_order))]
 
 #![allow(deprecated)]
 
@@ -62,6 +66,7 @@ pub mod reseeding;
 mod rand_impls;
 
 /// A type that can be randomly generated using an `Rng`.
+#[doc(hidden)]
 pub trait Rand : Sized {
     /// Generates a random instance of this type using the specified source of
     /// randomness.

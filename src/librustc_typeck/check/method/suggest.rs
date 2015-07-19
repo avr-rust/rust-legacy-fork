@@ -15,10 +15,12 @@ use CrateCtxt;
 
 use astconv::AstConv;
 use check::{self, FnCtxt};
-use middle::ty::{self, Ty};
+use middle::ty::{self, Ty, ToPolyTraitRef, ToPredicate, HasTypeFlags};
 use middle::def;
+use middle::lang_items::FnOnceTraitLangItem;
+use middle::subst::Substs;
+use middle::traits::{Obligation, SelectionContext};
 use metadata::{csearch, cstore, decoder};
-use util::ppaux::UserString;
 
 use syntax::{ast, ast_util};
 use syntax::codemap::Span;
@@ -27,7 +29,7 @@ use syntax::print::pprust;
 use std::cell;
 use std::cmp::Ordering;
 
-use super::{MethodError, CandidateSource, impl_item, trait_item};
+use super::{MethodError, NoMatchData, CandidateSource, impl_item, trait_item};
 use super::probe::Mode;
 
 pub fn report_error<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
@@ -35,17 +37,19 @@ pub fn report_error<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
                               rcvr_ty: Ty<'tcx>,
                               item_name: ast::Name,
                               rcvr_expr: Option<&ast::Expr>,
-                              error: MethodError)
+                              error: MethodError<'tcx>)
 {
     // avoid suggestions when we don't know what's going on.
-    if ty::type_is_error(rcvr_ty) {
+    if rcvr_ty.references_error() {
         return
     }
 
     match error {
-        MethodError::NoMatch(static_sources, out_of_scope_traits, mode) => {
+        MethodError::NoMatch(NoMatchData { static_candidates: static_sources,
+                                           unsatisfied_predicates,
+                                           out_of_scope_traits,
+                                           mode }) => {
             let cx = fcx.tcx();
-            let item_ustring = item_name.user_string(cx);
 
             fcx.type_error_message(
                 span,
@@ -54,28 +58,89 @@ pub fn report_error<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
                              in the current scope",
                             if mode == Mode::MethodCall { "method" }
                             else { "associated item" },
-                            item_ustring,
+                            item_name,
                             actual)
                 },
                 rcvr_ty,
                 None);
 
             // If the item has the name of a field, give a help note
-            if let (&ty::TyStruct(did, _), Some(_)) = (&rcvr_ty.sty, rcvr_expr) {
-                let fields = ty::lookup_struct_fields(cx, did);
-                if fields.iter().any(|f| f.name == item_name) {
-                    cx.sess.span_note(span,
-                        &format!("use `(s.{0})(...)` if you meant to call the \
-                                 function stored in the `{0}` field", item_ustring));
+            if let (&ty::TyStruct(did, substs), Some(expr)) = (&rcvr_ty.sty, rcvr_expr) {
+                let fields = cx.lookup_struct_fields(did);
+
+                if let Some(field) = fields.iter().find(|f| f.name == item_name) {
+                    let expr_string = match cx.sess.codemap().span_to_snippet(expr.span) {
+                        Ok(expr_string) => expr_string,
+                        _ => "s".into() // Default to a generic placeholder for the
+                                        // expression when we can't generate a string
+                                        // snippet
+                    };
+
+                    let span_stored_function = || {
+                        cx.sess.span_note(span,
+                                          &format!("use `({0}.{1})(...)` if you meant to call \
+                                                    the function stored in the `{1}` field",
+                                                   expr_string, item_name));
+                    };
+
+                    let span_did_you_mean = || {
+                        cx.sess.span_note(span, &format!("did you mean to write `{0}.{1}`?",
+                                                         expr_string, item_name));
+                    };
+
+                    // Determine if the field can be used as a function in some way
+                    let field_ty = cx.lookup_field_type(did, field.id, substs);
+                    if let Ok(fn_once_trait_did) = cx.lang_items.require(FnOnceTraitLangItem) {
+                        let infcx = fcx.infcx();
+                        infcx.probe(|_| {
+                            let fn_once_substs = Substs::new_trait(vec![infcx.next_ty_var()],
+                                                                   Vec::new(),
+                                                                   field_ty);
+                            let trait_ref = ty::TraitRef::new(fn_once_trait_did,
+                                                              cx.mk_substs(fn_once_substs));
+                            let poly_trait_ref = trait_ref.to_poly_trait_ref();
+                            let obligation = Obligation::misc(span,
+                                                              fcx.body_id,
+                                                              poly_trait_ref.to_predicate());
+                            let mut selcx = SelectionContext::new(infcx);
+
+                            if selcx.evaluate_obligation(&obligation) {
+                                span_stored_function();
+                            } else {
+                                span_did_you_mean();
+                            }
+                        });
+                    } else {
+                        match field_ty.sty {
+                            // fallback to matching a closure or function pointer
+                            ty::TyClosure(..) | ty::TyBareFn(..) => span_stored_function(),
+                            _ => span_did_you_mean(),
+                        }
+                    }
                 }
             }
 
             if !static_sources.is_empty() {
-                fcx.tcx().sess.fileline_note(
+                cx.sess.fileline_note(
                     span,
                     "found defined static methods, maybe a `self` is missing?");
 
                 report_candidates(fcx, span, item_name, static_sources);
+            }
+
+            if !unsatisfied_predicates.is_empty() {
+                let bound_list = unsatisfied_predicates.iter()
+                    .map(|p| format!("`{} : {}`",
+                                     p.self_ty(),
+                                     p))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                cx.sess.fileline_note(
+                    span,
+                    &format!("the method `{}` exists but the \
+                             following trait bounds were not satisfied: {}",
+                             item_name,
+                             bound_list));
             }
 
             suggest_traits_to_import(fcx, span, rcvr_ty, item_name,
@@ -93,8 +158,8 @@ pub fn report_error<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
             let msg = format!("the `{}` method from the `{}` trait cannot be explicitly \
                                invoked on this closure as we have not yet inferred what \
                                kind of closure it is",
-                               item_name.user_string(fcx.tcx()),
-                               ty::item_path_str(fcx.tcx(), trait_def_id));
+                               item_name,
+                               fcx.tcx().item_path_str(trait_def_id));
             let msg = if let Some(callee) = rcvr_expr {
                 format!("{}; use overloaded call notation instead (e.g., `{}()`)",
                         msg, pprust::expr_to_string(callee))
@@ -123,26 +188,27 @@ pub fn report_error<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
 
                     let impl_ty = check::impl_self_ty(fcx, span, impl_did).ty;
 
-                    let insertion = match ty::impl_trait_ref(fcx.tcx(), impl_did) {
+                    let insertion = match fcx.tcx().impl_trait_ref(impl_did) {
                         None => format!(""),
-                        Some(trait_ref) => format!(" of the trait `{}`",
-                                                   ty::item_path_str(fcx.tcx(),
-                                                                     trait_ref.def_id)),
+                        Some(trait_ref) => {
+                            format!(" of the trait `{}`",
+                                    fcx.tcx().item_path_str(trait_ref.def_id))
+                        }
                     };
 
                     span_note!(fcx.sess(), item_span,
                                "candidate #{} is defined in an impl{} for the type `{}`",
                                idx + 1,
                                insertion,
-                               impl_ty.user_string(fcx.tcx()));
+                               impl_ty);
                 }
                 CandidateSource::TraitSource(trait_did) => {
-                    let (_, item) = trait_item(fcx.tcx(), trait_did, item_name).unwrap();
+                    let item = trait_item(fcx.tcx(), trait_did, item_name).unwrap();
                     let item_span = fcx.tcx().map.def_id_span(item.def_id(), span);
                     span_note!(fcx.sess(), item_span,
                                "candidate #{} is defined in the trait `{}`",
                                idx + 1,
-                               ty::item_path_str(fcx.tcx(), trait_did));
+                               fcx.tcx().item_path_str(trait_did));
                 }
             }
         }
@@ -160,7 +226,6 @@ fn suggest_traits_to_import<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
                                       valid_out_of_scope_traits: Vec<ast::DefId>)
 {
     let tcx = fcx.tcx();
-    let item_ustring = item_name.user_string(tcx);
 
     if !valid_out_of_scope_traits.is_empty() {
         let mut candidates = valid_out_of_scope_traits;
@@ -179,7 +244,7 @@ fn suggest_traits_to_import<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
             fcx.sess().fileline_help(span,
                                      &*format!("candidate #{}: use `{}`",
                                                i + 1,
-                                               ty::item_path_str(fcx.tcx(), *trait_did)))
+                                               fcx.tcx().item_path_str(*trait_did)))
 
         }
         return
@@ -217,7 +282,7 @@ fn suggest_traits_to_import<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
              perhaps you need to implement {one_of_them}:",
             traits_define = if candidates.len() == 1 {"trait defines"} else {"traits define"},
             one_of_them = if candidates.len() == 1 {"it"} else {"one of them"},
-            name = item_ustring);
+            name = item_name);
 
         fcx.sess().fileline_help(span, &msg[..]);
 
@@ -225,7 +290,7 @@ fn suggest_traits_to_import<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
             fcx.sess().fileline_help(span,
                                      &*format!("candidate #{}: `{}`",
                                                i + 1,
-                                               ty::item_path_str(fcx.tcx(), trait_info.def_id)))
+                                               fcx.tcx().item_path_str(trait_info.def_id)))
         }
     }
 }

@@ -11,7 +11,7 @@
 //! Inspection and manipulation of the process's environment.
 //!
 //! This module contains methods to inspect various aspects such as
-//! environment varibles, process arguments, the current directory, and various
+//! environment variables, process arguments, the current directory, and various
 //! other important directories.
 
 #![stable(feature = "env", since = "1.0.0")]
@@ -36,7 +36,6 @@ use sys::os as os_imp;
 ///
 /// * Current directory does not exist.
 /// * There are insufficient permissions to access the current directory.
-/// * The internal buffer is not large enough to hold the path.
 ///
 /// # Examples
 ///
@@ -486,6 +485,7 @@ static EXIT_STATUS: AtomicIsize = AtomicIsize::new(0);
 ///
 /// Note that this is not synchronized against modifications of other threads.
 #[unstable(feature = "exit_status", reason = "managing the exit status may change")]
+#[deprecated(since = "1.2.0", reason = "use process::exit instead")]
 pub fn set_exit_status(code: i32) {
     EXIT_STATUS.store(code as isize, Ordering::SeqCst)
 }
@@ -493,6 +493,7 @@ pub fn set_exit_status(code: i32) {
 /// Fetches the process's current exit code. This defaults to 0 and can change
 /// by calling `set_exit_status`.
 #[unstable(feature = "exit_status", reason = "managing the exit status may change")]
+#[deprecated(since = "1.2.0", reason = "use process::exit instead")]
 pub fn get_exit_status() -> i32 {
     EXIT_STATUS.load(Ordering::SeqCst) as i32
 }
@@ -632,6 +633,7 @@ pub mod consts {
     /// - freebsd
     /// - dragonfly
     /// - bitrig
+    /// - netbsd
     /// - openbsd
     /// - android
     /// - windows
@@ -751,6 +753,17 @@ mod os {
 mod os {
     pub const FAMILY: &'static str = "unix";
     pub const OS: &'static str = "bitrig";
+    pub const DLL_PREFIX: &'static str = "lib";
+    pub const DLL_SUFFIX: &'static str = ".so";
+    pub const DLL_EXTENSION: &'static str = "so";
+    pub const EXE_SUFFIX: &'static str = "";
+    pub const EXE_EXTENSION: &'static str = "";
+}
+
+#[cfg(target_os = "netbsd")]
+mod os {
+    pub const FAMILY: &'static str = "unix";
+    pub const OS: &'static str = "netbsd";
     pub const DLL_PREFIX: &'static str = "lib";
     pub const DLL_SUFFIX: &'static str = ".so";
     pub const DLL_EXTENSION: &'static str = "so";

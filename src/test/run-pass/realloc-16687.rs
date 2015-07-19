@@ -13,13 +13,12 @@
 // Ideally this would be revised to use no_std, but for now it serves
 // well enough to reproduce (and illustrate) the bug from #16687.
 
-#![feature(alloc)]
+#![feature(heap_api, alloc, oom)]
 
 extern crate alloc;
 
 use alloc::heap;
 use std::ptr;
-use std::iter::repeat;
 
 fn main() {
     unsafe {
@@ -29,7 +28,7 @@ fn main() {
 
 unsafe fn test_triangle() -> bool {
     static COUNT : usize = 16;
-    let mut ascend = repeat(ptr::null_mut()).take(COUNT).collect::<Vec<_>>();
+    let mut ascend = vec![ptr::null_mut(); COUNT];
     let ascend = &mut *ascend;
     static ALIGN : usize = 1;
 

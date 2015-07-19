@@ -8,15 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![unstable(feature = "std_misc")]
-
-use borrow::{Cow, ToOwned};
-use boxed::{self, Box};
+use ascii;
+use borrow::{Cow, ToOwned, Borrow};
+use boxed::Box;
 use clone::Clone;
 use convert::{Into, From};
 use cmp::{PartialEq, Eq, PartialOrd, Ord, Ordering};
 use error::Error;
-use fmt;
+use fmt::{self, Write};
 use io;
 use iter::Iterator;
 use libc;
@@ -208,6 +207,9 @@ impl CString {
     /// `into_ptr`. The length of the string will be recalculated
     /// using the pointer.
     #[unstable(feature = "cstr_memory", reason = "recently added")]
+    // NB: may want to be called from_raw, needs to consider CStr::from_ptr,
+    //     Box::from_raw (or whatever it's currently called), and
+    //     slice::from_raw_parts
     pub unsafe fn from_ptr(ptr: *const libc::c_char) -> CString {
         let len = libc::strlen(ptr) + 1; // Including the NUL byte
         let slice = slice::from_raw_parts(ptr, len as usize);
@@ -223,11 +225,12 @@ impl CString {
     ///
     /// Failure to call `from_ptr` will lead to a memory leak.
     #[unstable(feature = "cstr_memory", reason = "recently added")]
+    // NB: may want to be called into_raw, see comments on from_ptr
     pub fn into_ptr(self) -> *const libc::c_char {
         // It is important that the bytes be sized to fit - we need
         // the capacity to be determinable from the string length, and
         // shrinking to fit is the only way to be sure.
-        boxed::into_raw(self.inner) as *const libc::c_char
+        Box::into_raw(self.inner) as *const libc::c_char
     }
 
     /// Returns the contents of this `CString` as a slice of bytes.
@@ -266,8 +269,24 @@ impl Deref for CString {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Debug for CString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&String::from_utf8_lossy(self.as_bytes()), f)
+        fmt::Debug::fmt(&**self, f)
     }
+}
+
+#[stable(feature = "cstr_debug", since = "1.3.0")]
+impl fmt::Debug for CStr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        try!(write!(f, "\""));
+        for byte in self.to_bytes().iter().flat_map(|&b| ascii::escape_default(b)) {
+            try!(f.write_char(byte as char));
+        }
+        write!(f, "\"")
+    }
+}
+
+#[stable(feature = "cstr_borrow", since = "1.3.0")]
+impl Borrow<CStr> for CString {
+    fn borrow(&self) -> &CStr { self }
 }
 
 impl NulError {
@@ -442,6 +461,15 @@ impl Ord for CStr {
     }
 }
 
+#[stable(feature = "cstr_borrow", since = "1.3.0")]
+impl ToOwned for CStr {
+    type Owned = CString;
+
+    fn to_owned(&self) -> CString {
+        unsafe { CString::from_vec_unchecked(self.to_bytes().to_vec()) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use prelude::v1::*;
@@ -485,8 +513,8 @@ mod tests {
 
     #[test]
     fn formatted() {
-        let s = CString::new(&b"12"[..]).unwrap();
-        assert_eq!(format!("{:?}", s), "\"12\"");
+        let s = CString::new(&b"abc\x01\x02\n\xE2\x80\xA6\xFF"[..]).unwrap();
+        assert_eq!(format!("{:?}", s), r#""abc\x01\x02\n\xe2\x80\xa6\xff""#);
     }
 
     #[test]
@@ -512,5 +540,29 @@ mod tests {
             assert!(CStr::from_ptr(ptr).to_str().is_err());
             assert_eq!(CStr::from_ptr(ptr).to_string_lossy(), Owned::<str>(format!("123\u{FFFD}")));
         }
+    }
+
+    #[test]
+    fn to_owned() {
+        let data = b"123\0";
+        let ptr = data.as_ptr() as *const libc::c_char;
+
+        let owned = unsafe { CStr::from_ptr(ptr).to_owned() };
+        assert_eq!(owned.as_bytes_with_nul(), data);
+    }
+
+    #[test]
+    fn equal_hash() {
+        use hash;
+
+        let data = b"123\xE2\xFA\xA6\0";
+        let ptr = data.as_ptr() as *const libc::c_char;
+        let cstr: &'static CStr = unsafe { CStr::from_ptr(ptr) };
+
+        let cstr_hash = hash::hash::<_, hash::SipHasher>(&cstr);
+        let cstring_hash =
+            hash::hash::<_, hash::SipHasher>(&CString::new(&data[..data.len() - 1]).unwrap());
+
+        assert_eq!(cstr_hash, cstring_hash);
     }
 }

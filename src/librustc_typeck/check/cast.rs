@@ -27,7 +27,12 @@
 //!
 //! where `&.T` and `*T` are references of either mutability,
 //! and where unsize_kind(`T`) is the kind of the unsize info
-//! in `T` - a vtable or a length (or `()` if `T: Sized`).
+//! in `T` - the vtable for a trait definition (e.g. `fmt::Display` or
+//! `Iterator`, not `Iterator<Item=u8>`) or a length (or `()` if `T: Sized`).
+//!
+//! Note that lengths are not adjusted when casting raw slices -
+//! `T: *const [u16] as *const [u8]` creates a slice that only includes
+//! half of the original memory.
 //!
 //! Casting is not transitive, that is, even if `e as U1 as U2` is a valid
 //! expression, `e as U2` is not necessarily so (in fact it will only be valid if
@@ -40,12 +45,10 @@ use super::structurally_resolved_type;
 
 use lint;
 use middle::cast::{CastKind, CastTy};
-use middle::ty;
-use middle::ty::Ty;
+use middle::ty::{self, Ty, HasTypeFlags};
 use syntax::ast;
 use syntax::ast::UintTy::{TyU8};
 use syntax::codemap::Span;
-use util::ppaux::Repr;
 
 /// Reifies a cast check to be checked once we have full type information for
 /// a function context.
@@ -60,7 +63,7 @@ pub struct CastCheck<'tcx> {
 /// fat pointers if their unsize-infos have the same kind.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum UnsizeKind<'tcx> {
-    Vtable,
+    Vtable(ast::DefId),
     Length,
     /// The unsize info of this projection
     OfProjection(&'tcx ty::ProjectionTy<'tcx>),
@@ -75,9 +78,9 @@ fn unsize_kind<'a,'tcx>(fcx: &FnCtxt<'a, 'tcx>,
                         -> Option<UnsizeKind<'tcx>> {
     match t.sty {
         ty::TySlice(_) | ty::TyStr => Some(UnsizeKind::Length),
-        ty::TyTrait(_) => Some(UnsizeKind::Vtable),
+        ty::TyTrait(ref tty) => Some(UnsizeKind::Vtable(tty.principal_def_id())),
         ty::TyStruct(did, substs) => {
-            match ty::struct_fields(fcx.tcx(), did, substs).pop() {
+            match fcx.tcx().struct_fields(did, substs).pop() {
                 None => None,
                 Some(f) => unsize_kind(fcx, f.mt.ty)
             }
@@ -166,7 +169,7 @@ impl<'tcx> CastCheck<'tcx> {
     fn trivial_cast_lint<'a>(&self, fcx: &FnCtxt<'a, 'tcx>) {
         let t_cast = self.cast_ty;
         let t_expr = self.expr_ty;
-        if ty::type_is_numeric(t_cast) && ty::type_is_numeric(t_expr) {
+        if t_cast.is_numeric() && t_expr.is_numeric() {
             fcx.tcx().sess.add_lint(lint::builtin::TRIVIAL_NUMERIC_CASTS,
                                     self.expr.id,
                                     self.span,
@@ -192,10 +195,10 @@ impl<'tcx> CastCheck<'tcx> {
         self.expr_ty = structurally_resolved_type(fcx, self.span, self.expr_ty);
         self.cast_ty = structurally_resolved_type(fcx, self.span, self.cast_ty);
 
-        debug!("check_cast({}, {} as {})", self.expr.id, self.expr_ty.repr(fcx.tcx()),
-               self.cast_ty.repr(fcx.tcx()));
+        debug!("check_cast({}, {:?} as {:?})", self.expr.id, self.expr_ty,
+               self.cast_ty);
 
-        if ty::type_is_error(self.expr_ty) || ty::type_is_error(self.cast_ty) {
+        if self.expr_ty.references_error() || self.cast_ty.references_error() {
             // No sense in giving duplicate error messages
         } else if self.try_coercion_cast(fcx) {
             self.trivial_cast_lint(fcx);
@@ -269,12 +272,12 @@ impl<'tcx> CastCheck<'tcx> {
 
     fn check_ptr_ptr_cast<'a>(&self,
                               fcx: &FnCtxt<'a, 'tcx>,
-                              m_expr: &'tcx ty::mt<'tcx>,
-                              m_cast: &'tcx ty::mt<'tcx>)
+                              m_expr: &'tcx ty::TypeAndMut<'tcx>,
+                              m_cast: &'tcx ty::TypeAndMut<'tcx>)
                               -> Result<CastKind, CastError>
     {
-        debug!("check_ptr_ptr_cast m_expr={} m_cast={}",
-               m_expr.repr(fcx.tcx()), m_cast.repr(fcx.tcx()));
+        debug!("check_ptr_ptr_cast m_expr={:?} m_cast={:?}",
+               m_expr, m_cast);
         // ptr-ptr cast. vtables must match.
 
         // Cast to sized is OK
@@ -296,7 +299,7 @@ impl<'tcx> CastCheck<'tcx> {
 
     fn check_fptr_ptr_cast<'a>(&self,
                                fcx: &FnCtxt<'a, 'tcx>,
-                               m_cast: &'tcx ty::mt<'tcx>)
+                               m_cast: &'tcx ty::TypeAndMut<'tcx>)
                                -> Result<CastKind, CastError>
     {
         // fptr-ptr cast. must be to sized ptr
@@ -310,7 +313,7 @@ impl<'tcx> CastCheck<'tcx> {
 
     fn check_ptr_addr_cast<'a>(&self,
                                fcx: &FnCtxt<'a, 'tcx>,
-                               m_expr: &'tcx ty::mt<'tcx>)
+                               m_expr: &'tcx ty::TypeAndMut<'tcx>)
                                -> Result<CastKind, CastError>
     {
         // ptr-addr cast. must be from sized ptr
@@ -324,8 +327,8 @@ impl<'tcx> CastCheck<'tcx> {
 
     fn check_ref_cast<'a>(&self,
                           fcx: &FnCtxt<'a, 'tcx>,
-                          m_expr: &'tcx ty::mt<'tcx>,
-                          m_cast: &'tcx ty::mt<'tcx>)
+                          m_expr: &'tcx ty::TypeAndMut<'tcx>,
+                          m_cast: &'tcx ty::TypeAndMut<'tcx>)
                           -> Result<CastKind, CastError>
     {
         // array-ptr-cast.
@@ -350,7 +353,7 @@ impl<'tcx> CastCheck<'tcx> {
 
     fn check_addr_ptr_cast<'a>(&self,
                                fcx: &FnCtxt<'a, 'tcx>,
-                               m_cast: &'tcx ty::mt<'tcx>)
+                               m_cast: &'tcx ty::TypeAndMut<'tcx>)
                                -> Result<CastKind, CastError>
     {
         // ptr-addr cast. pointer must be thin.

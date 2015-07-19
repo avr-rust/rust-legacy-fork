@@ -522,7 +522,7 @@ pub enum TyParamBound {
 impl TyParamBound {
     fn maybe_sized(cx: &DocContext) -> TyParamBound {
         use syntax::ast::TraitBoundModifier as TBM;
-        let mut sized_bound = ty::BuiltinBound::BoundSized.clean(cx);
+        let mut sized_bound = ty::BoundSized.clean(cx);
         if let TyParamBound::TraitBound(_, ref mut tbm) = sized_bound {
             *tbm = TBM::Maybe
         };
@@ -713,19 +713,6 @@ impl<'tcx> Clean<TyParamBound> for ty::TraitRef<'tcx> {
             },
             lifetimes: late_bounds
         }, ast::TraitBoundModifier::None)
-    }
-}
-
-impl<'tcx> Clean<Vec<TyParamBound>> for ty::ParamBounds<'tcx> {
-    fn clean(&self, cx: &DocContext) -> Vec<TyParamBound> {
-        let mut v = Vec::new();
-        for t in &self.trait_bounds {
-            v.push(t.clean(cx));
-        }
-        for r in self.region_bounds.iter().filter_map(|r| r.clean(cx)) {
-            v.push(RegionBound(r));
-        }
-        v
     }
 }
 
@@ -1345,7 +1332,7 @@ impl<'tcx> Clean<Item> for ty::Method<'tcx> {
         let provided = match self.container {
             ty::ImplContainer(..) => false,
             ty::TraitContainer(did) => {
-                ty::provided_trait_methods(cx.tcx(), did).iter().any(|m| {
+                cx.tcx().provided_trait_methods(did).iter().any(|m| {
                     m.def_id == self.def_id
                 })
             }
@@ -1742,7 +1729,7 @@ impl Clean<Item> for ast::StructField {
     }
 }
 
-impl Clean<Item> for ty::field_ty {
+impl Clean<Item> for ty::FieldTy {
     fn clean(&self, cx: &DocContext) -> Item {
         use syntax::parse::token::special_idents::unnamed_field;
         use rustc::metadata::csearch;
@@ -1755,7 +1742,7 @@ impl Clean<Item> for ty::field_ty {
             (Some(self.name), Some(attr_map.get(&self.id.node).unwrap()))
         };
 
-        let ty = ty::lookup_item_type(cx.tcx(), self.id);
+        let ty = cx.tcx().lookup_item_type(self.id);
 
         Item {
             name: name.clean(cx),
@@ -2549,12 +2536,12 @@ fn name_from_pat(p: &ast::Pat) -> String {
             format!("{} {{ {}{} }}", path_to_string(name),
                 fields.iter().map(|&Spanned { node: ref fp, .. }|
                                   format!("{}: {}", fp.ident.as_str(), name_from_pat(&*fp.pat)))
-                             .collect::<Vec<String>>().connect(", "),
+                             .collect::<Vec<String>>().join(", "),
                 if etc { ", ..." } else { "" }
             )
         },
         PatTup(ref elts) => format!("({})", elts.iter().map(|p| name_from_pat(&**p))
-                                            .collect::<Vec<String>>().connect(", ")),
+                                            .collect::<Vec<String>>().join(", ")),
         PatBox(ref p) => name_from_pat(&**p),
         PatRegion(ref p, _) => name_from_pat(&**p),
         PatLit(..) => {
@@ -2568,7 +2555,7 @@ fn name_from_pat(p: &ast::Pat) -> String {
             let begin = begin.iter().map(|p| name_from_pat(&**p));
             let mid = mid.as_ref().map(|p| format!("..{}", name_from_pat(&**p))).into_iter();
             let end = end.iter().map(|p| name_from_pat(&**p));
-            format!("[{}]", begin.chain(mid).chain(end).collect::<Vec<_>>().connect(", "))
+            format!("[{}]", begin.chain(mid).chain(end).collect::<Vec<_>>().join(", "))
         },
         PatMac(..) => {
             warn!("can't document the name of a function argument \
@@ -2744,8 +2731,8 @@ impl<'tcx> Clean<Item> for ty::AssociatedType<'tcx> {
             // are actually located on the trait/impl itself, so we need to load
             // all of the generics from there and then look for bounds that are
             // applied to this associated type in question.
-            let def = ty::lookup_trait_def(cx.tcx(), did);
-            let predicates = ty::lookup_predicates(cx.tcx(), did);
+            let def = cx.tcx().lookup_trait_def(did);
+            let predicates = cx.tcx().lookup_predicates(did);
             let generics = (&def.generics, &predicates, subst::TypeSpace).clean(cx);
             generics.where_predicates.iter().filter_map(|pred| {
                 let (name, self_type, trait_, bounds) = match *pred {

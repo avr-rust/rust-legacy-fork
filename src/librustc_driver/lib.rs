@@ -26,14 +26,13 @@
       html_root_url = "http://doc.rust-lang.org/nightly/")]
 
 #![feature(box_syntax)]
-#![feature(collections)]
 #![feature(libc)]
 #![feature(quote)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
-#![feature(staged_api)]
-#![feature(exit_status)]
 #![feature(set_stdio)]
+#![feature(staged_api)]
+#![feature(vec_push_all)]
 
 extern crate arena;
 extern crate flate;
@@ -73,6 +72,7 @@ use std::env;
 use std::io::{self, Read, Write};
 use std::iter::repeat;
 use std::path::PathBuf;
+use std::process;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -202,20 +202,24 @@ pub trait CompilerCalls<'a> {
     // be called straight after options have been parsed but before anything
     // else (e.g., selecting input and output).
     fn early_callback(&mut self,
-                      &getopts::Matches,
-                      &diagnostics::registry::Registry)
-                      -> Compilation;
+                      _: &getopts::Matches,
+                      _: &diagnostics::registry::Registry)
+                      -> Compilation {
+        Compilation::Continue
+    }
 
     // Hook for a callback late in the process of handling arguments. This will
     // be called just before actual compilation starts (and before build_controller
     // is called), after all arguments etc. have been completely handled.
     fn late_callback(&mut self,
-                     &getopts::Matches,
-                     &Session,
-                     &Input,
-                     &Option<PathBuf>,
-                     &Option<PathBuf>)
-                     -> Compilation;
+                     _: &getopts::Matches,
+                     _: &Session,
+                     _: &Input,
+                     _: &Option<PathBuf>,
+                     _: &Option<PathBuf>)
+                     -> Compilation {
+        Compilation::Continue
+    }
 
     // Called after we extract the input from the arguments. Gives the implementer
     // an opportunity to change the inputs or to add some custom input handling.
@@ -231,12 +235,14 @@ pub trait CompilerCalls<'a> {
     // emitting error messages. Returning None will cause compilation to stop
     // at this point.
     fn no_input(&mut self,
-                &getopts::Matches,
-                &config::Options,
-                &Option<PathBuf>,
-                &Option<PathBuf>,
-                &diagnostics::registry::Registry)
-                -> Option<(Input, Option<PathBuf>)>;
+                _: &getopts::Matches,
+                _: &config::Options,
+                _: &Option<PathBuf>,
+                _: &Option<PathBuf>,
+                _: &diagnostics::registry::Registry)
+                -> Option<(Input, Option<PathBuf>)> {
+        None
+    }
 
     // Parse pretty printing information from the arguments. The implementer can
     // choose to ignore this (the default will return None) which will skip pretty
@@ -377,12 +383,10 @@ impl<'a> CompilerCalls<'a> for RustcDefaultCalls {
         if sess.opts.debugging_opts.save_analysis {
             control.after_analysis.callback = box |state| {
                 time(state.session.time_passes(),
-                     "save analysis",
-                     state.expanded_crate.unwrap(),
-                     |krate| save::process_crate(state.session,
-                                                 krate,
-                                                 state.analysis.unwrap(),
-                                                 state.out_dir));
+                     "save analysis", (),
+                     |_| save::process_crate(state.tcx.unwrap(),
+                                             state.analysis.unwrap(),
+                                             state.out_dir));
             };
             control.make_glob_map = resolve::MakeGlobMap::Yes;
         }
@@ -454,10 +458,8 @@ impl RustcDefaultCalls {
                     let metadata = driver::collect_crate_metadata(sess, attrs);
                     *sess.crate_metadata.borrow_mut() = metadata;
                     for &style in &crate_types {
-                        let fname = link::filename_for_input(sess,
-                                                             style,
-                                                             &id,
-                                                             &t_outputs.with_extension(""));
+                        let fname = link::filename_for_input(sess, style, &id,
+                                                             &t_outputs);
                         println!("{}", fname.file_name().unwrap()
                                             .to_string_lossy());
                     }
@@ -483,8 +485,7 @@ pub fn commit_date_str() -> Option<&'static str> {
     option_env!("CFG_VER_DATE")
 }
 
-/// Prints version information and returns None on success or an error
-/// message on panic.
+/// Prints version information
 pub fn version(binary: &str, matches: &getopts::Matches) {
     let verbose = matches.opt_present("verbose");
 
@@ -611,7 +612,7 @@ Available lint options:
         for (name, to) in lints {
             let name = name.to_lowercase().replace("_", "-");
             let desc = to.into_iter().map(|x| x.as_str().replace("_", "-"))
-                         .collect::<Vec<String>>().connect(", ");
+                         .collect::<Vec<String>>().join(", ");
             println!("    {}  {}",
                      padded(&name[..]), desc);
         }
@@ -861,5 +862,5 @@ pub fn diagnostics_registry() -> diagnostics::registry::Registry {
 
 pub fn main() {
     let result = run(env::args().collect());
-    std::env::set_exit_status(result as i32);
+    process::exit(result as i32);
 }

@@ -14,30 +14,6 @@
 //! library. Each macro is available for use when linking against the standard
 //! library.
 
-#![unstable(feature = "std_misc")]
-
-/// The entry point for panic of Rust threads.
-///
-/// This macro is used to inject panic into a Rust thread, causing the thread to
-/// unwind and panic entirely. Each thread's panic can be reaped as the
-/// `Box<Any>` type, and the single-argument form of the `panic!` macro will be
-/// the value which is transmitted.
-///
-/// The multi-argument form of this macro panics with a string and has the
-/// `format!` syntax for building a string.
-///
-/// # Examples
-///
-/// ```should_panic
-/// # #![allow(unreachable_code)]
-/// panic!();
-/// panic!("this is a terrible mistake!");
-/// panic!(4); // panic with the value of 4 to be collected elsewhere
-/// panic!("this is a {} {message}", "fancy", message = "message");
-/// ```
-#[macro_export]
-#[stable(feature = "rust1", since = "1.0.0")]
-#[allow_internal_unstable]
 /// The entry point for panic of Rust threads.
 ///
 /// This macro is used to inject panic into a Rust thread, causing the thread to
@@ -165,7 +141,7 @@ macro_rules! try {
 /// # Examples
 ///
 /// ```
-/// # #![feature(std_misc)]
+/// # #![feature(mpsc_select)]
 /// use std::thread;
 /// use std::sync::mpsc;
 ///
@@ -191,7 +167,7 @@ macro_rules! try {
 ///
 /// For more information about select, see the `std::sync::mpsc::Select` structure.
 #[macro_export]
-#[unstable(feature = "std_misc")]
+#[unstable(feature = "mpsc_select")]
 macro_rules! select {
     (
         $($name:pat = $rx:ident.$meth:ident() => $code:expr),+
@@ -333,7 +309,7 @@ pub mod builtin {
 
     /// A macro which expands to the line number on which it was invoked.
     ///
-    /// The expanded expression has type `usize`, and the returned line is not
+    /// The expanded expression has type `u32`, and the returned line is not
     /// the invocation of the `line!()` macro itself, but rather the first macro
     /// invocation leading up to the invocation of the `line!()` macro.
     ///
@@ -348,7 +324,7 @@ pub mod builtin {
 
     /// A macro which expands to the column number on which it was invoked.
     ///
-    /// The expanded expression has type `usize`, and the returned column is not
+    /// The expanded expression has type `u32`, and the returned column is not
     /// the invocation of the `column!()` macro itself, but rather the first macro
     /// invocation leading up to the invocation of the `column!()` macro.
     ///

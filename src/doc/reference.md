@@ -338,12 +338,16 @@ type of the literal. The integer suffix must be the name of one of the
 integral types: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`,
 `isize`, or `usize`.
 
-The type of an _unsuffixed_ integer literal is determined by type inference.
-If an integer type can be _uniquely_ determined from the surrounding program
-context, the unsuffixed integer literal has that type. If the program context
-underconstrains the type, it defaults to the signed 32-bit integer `i32`; if
-the program context overconstrains the type, it is considered a static type
-error.
+The type of an _unsuffixed_ integer literal is determined by type inference:
+
+* If an integer type can be _uniquely_ determined from the surrounding
+  program context, the unsuffixed integer literal has that type.
+
+* If the program context under-constrains the type, it defaults to the
+  signed 32-bit integer `i32`.
+
+* If the program context over-constrains the type, it is considered a
+  static type error.
 
 Examples of integer literals of various forms:
 
@@ -371,12 +375,17 @@ The suffix forcibly sets the type of the literal. There are two valid
 _floating-point suffixes_, `f32` and `f64` (the 32-bit and 64-bit floating point
 types), which explicitly determine the type of the literal.
 
-The type of an _unsuffixed_ floating-point literal is determined by type
-inference. If a floating-point type can be _uniquely_ determined from the
-surrounding program context, the unsuffixed floating-point literal has that type.
-If the program context underconstrains the type, it defaults to double-precision `f64`;
-if the program context overconstrains the type, it is considered a static type
-error.
+The type of an _unsuffixed_ floating-point literal is determined by
+type inference:
+
+* If a floating-point type can be _uniquely_ determined from the
+  surrounding program context, the unsuffixed floating-point literal
+  has that type.
+
+* If the program context under-constrains the type, it defaults to `f64`.
+
+* If the program context over-constrains the type, it is considered a
+  static type error.
 
 Examples of floating-point literals of various forms:
 
@@ -944,9 +953,20 @@ fn foo<T>(x: T) where T: Debug {
 ```
 
 When a generic function is referenced, its type is instantiated based on the
-context of the reference. For example, calling the `iter` function defined
-above on `[1, 2]` will instantiate type parameter `T` with `i32`, and require
-the closure parameter to have type `Fn(i32)`.
+context of the reference. For example, calling the `foo` function here:
+
+```
+use std::fmt::Debug;
+
+fn foo<T>(x: &[T]) where T: Debug {
+    // details elided
+    # ()
+}
+
+foo(&[1, 2]);
+```
+
+will instantiate type parameter `T` with `i32`.
 
 The type parameters can also be explicitly supplied in a trailing
 [path](#paths) component after the function name. This might be necessary if
@@ -1036,11 +1056,8 @@ This is a list of behavior not considered *unsafe* in Rust terms, but that may
 be undesired.
 
 * Deadlocks
-* Reading data from private fields (`std::repr`)
 * Leaks of memory and other resources
 * Exiting without calling destructors
-* Sending signals
-* Accessing/modifying the file system
 * Integer overflow
   - Overflow is considered "unexpected" behavior and is always user-error,
     unless the `wrapping` primitives are used. In non-optimized builds, the compiler
@@ -1275,7 +1292,7 @@ All access to a static is safe, but there are a number of restrictions on
 statics:
 
 * Statics may not contain any destructors.
-* The types of static values must ascribe to `Sync` to allow threadsafe access.
+* The types of static values must ascribe to `Sync` to allow thread-safe access.
 * Statics may not refer to other statics by value, only by reference.
 * Constants cannot refer to statics.
 
@@ -1677,7 +1694,7 @@ explain, here's a few use cases and what they would entail:
 * A crate needs a global available "helper module" to itself, but it doesn't
   want to expose the helper module as a public API. To accomplish this, the
   root of the crate's hierarchy would have a private module which then
-  internally has a "public api". Because the entire crate is a descendant of
+  internally has a "public API". Because the entire crate is a descendant of
   the root, then the entire local crate can access this private module through
   the second case.
 
@@ -1940,8 +1957,6 @@ macro scope.
   object file that this item's contents will be placed into.
 - `no_mangle` - on any item, do not apply the standard name mangling. Set the
   symbol for this item to its identifier.
-- `packed` - on structs or enums, eliminate any padding that would be used to
-  align fields.
 - `simd` - on certain tuple structs, derive the arithmetic operators, which
   lower to the target's SIMD instructions, if any; the `simd` feature gate
   is necessary to use this attribute.
@@ -2007,7 +2022,7 @@ The following configurations must be defined by the implementation:
   production.  For example, it controls the behavior of the standard library's
   `debug_assert!` macro.
 * `target_arch = "..."`. Target CPU architecture, such as `"x86"`, `"x86_64"`
-  `"mips"`, `"powerpc"`, `"arm"`, `"aarch64"`, or `"avr"`.
+  `"mips"`, `"powerpc"`, `"arm"`, or `"aarch64"`.
 * `target_endian = "..."`. Endianness of the target CPU, either `"little"` or
   `"big"`.
 * `target_family = "..."`. Operating system family of the target, e. g.
@@ -2015,7 +2030,7 @@ The following configurations must be defined by the implementation:
   as a configuration itself, like `unix` or `windows`.
 * `target_os = "..."`. Operating system of the target, examples include
   `"windows"`, `"macos"`, `"ios"`, `"linux"`, `"android"`, `"freebsd"`, `"dragonfly"`,
-  `"bitrig"`, `"openbsd"`, or `"none"``.
+  `"bitrig"` , `"openbsd"` or `"netbsd"`.
 * `target_pointer_width = "..."`. Target pointer width in bits. This is set
   to `"32"` for targets with 32-bit pointers, and likewise set to `"64"` for
   64-bit pointers.
@@ -2498,9 +2513,8 @@ Here are some examples:
 #### Moved and copied types
 
 When a [local variable](#variables) is used as an
-[rvalue](#lvalues,-rvalues-and-temporaries) the variable will either be moved
-or copied, depending on its type. All values whose type implements `Copy` are
-copied, all others are moved.
+[rvalue](#lvalues,-rvalues-and-temporaries), the variable will be copied
+if its type implements `Copy`. All others are moved.
 
 ### Literal expressions
 
@@ -2768,22 +2782,24 @@ meaning of the operators on standard types is given here.
 Like the [arithmetic operators](#arithmetic-operators), bitwise operators are
 syntactic sugar for calls to methods of built-in traits. This means that
 bitwise operators can be overridden for user-defined types. The default
-meaning of the operators on standard types is given here.
+meaning of the operators on standard types is given here. Bitwise `&`, `|` and
+`^` applied to boolean arguments are equivalent to logical `&&`, `||` and `!=`
+evaluated in non-lazy fashion.
 
 * `&`
-  : And.
+  : Bitwise AND.
     Calls the `bitand` method of the `std::ops::BitAnd` trait.
 * `|`
-  : Inclusive or.
+  : Bitwise inclusive OR.
     Calls the `bitor` method of the `std::ops::BitOr` trait.
 * `^`
-  : Exclusive or.
+  : Bitwise exclusive OR.
     Calls the `bitxor` method of the `std::ops::BitXor` trait.
 * `<<`
   : Left shift.
     Calls the `shl` method of the `std::ops::Shl` trait.
 * `>>`
-  : Right shift.
+  : Right shift (arithmetic).
     Calls the `shr` method of the `std::ops::Shr` trait.
 
 #### Lazy boolean operators
@@ -2863,7 +2879,6 @@ operand.
 ```
 # let mut x = 0;
 # let y = 0;
-
 x = y;
 ```
 
@@ -2953,14 +2968,12 @@ move values (depending on their type) from the environment into the lambda
 expression's captured environment.
 
 In this example, we define a function `ten_times` that takes a higher-order
-function argument, and call it with a lambda expression as an argument:
+function argument, and we then call it with a lambda expression as an argument:
 
 ```
 fn ten_times<F>(f: F) where F: Fn(i32) {
-    let mut i = 0i32;
-    while i < 10 {
-        f(i);
-        i += 1;
+    for index in 0..10 {
+        f(index);
     }
 }
 
@@ -3309,10 +3322,13 @@ An example of a tuple type and its use:
 
 ```
 type Pair<'a> = (i32, &'a str);
-let p: Pair<'static> = (10, "hello");
+let p: Pair<'static> = (10, "ten");
 let (a, b) = p;
-assert!(b != "world");
-assert!(p.0 == 10);
+
+assert_eq!(a, 10);
+assert_eq!(b, "ten");
+assert_eq!(p.0, 10);
+assert_eq!(p.1, "ten");
 ```
 
 For historical reasons and convenience, the tuple type with no elements (`()`)
@@ -3322,8 +3338,8 @@ is often called ‘unit’ or ‘the unit type’.
 
 Rust has two different types for a list of items:
 
-* `[T; N]`, an 'array'.
-* `&[T]`, a 'slice'.
+* `[T; N]`, an 'array'
+* `&[T]`, a 'slice'
 
 An array has a fixed size, and can be allocated on either the stack or the
 heap.
@@ -3331,18 +3347,23 @@ heap.
 A slice is a 'view' into an array. It doesn't own the data it points
 to, it borrows it.
 
-An example of each kind:
+Examples:
 
 ```{rust}
-let vec: Vec<i32> = vec![1, 2, 3];
-let arr: [i32; 3] = [1, 2, 3];
-let s: &[i32] = &vec[..];
+// A stack-allocated array
+let array: [i32; 3] = [1, 2, 3];
+
+// A heap-allocated array
+let vector: Vec<i32> = vec![1, 2, 3];
+
+// A slice into an array
+let slice: &[i32] = &vector[..];
 ```
 
 As you can see, the `vec!` macro allows you to create a `Vec<T>` easily. The
 `vec!` macro is also part of the standard library, rather than the language.
 
-All in-bounds elements of arrays, and slices are always initialized, and access
+All in-bounds elements of arrays and slices are always initialized, and access
 to an array or slice is always bounds-checked.
 
 ### Structure types
@@ -3476,7 +3497,7 @@ x = bo(5,7);
 
 #### Function types for specific items
 
-Internally to the compiler, there are also function types that are specific to a particular
+Internal to the compiler, there are also function types that are specific to a particular
 function item. In the following snippet, for example, the internal types of the functions
 `foo` and `bar` are different, despite the fact that they have the same signature:
 
@@ -3504,13 +3525,14 @@ more of the closure traits:
 
 * `FnMut`
   : The closure can be called multiple times as mutable. A closure called as
-    `FnMut` can mutate values from its environment. `FnMut` implies
-    `FnOnce`.
+    `FnMut` can mutate values from its environment. `FnMut` inherits from
+    `FnOnce` (i.e. anything implementing `FnMut` also implements `FnOnce`).
 
 * `Fn`
   : The closure can be called multiple times through a shared reference.
     A closure called as `Fn` can neither move out from nor mutate values
-    from its environment. `Fn` implies `FnMut` and `FnOnce`.
+    from its environment. `Fn` inherits from `FnMut`, which itself
+    inherits from `FnOnce`.
 
 
 ### Trait objects
@@ -3633,53 +3655,77 @@ Coercions are defined in [RFC401]. A coercion is implicit and has no syntax.
 ### Coercion sites
 
 A coercion can only occur at certain coercion sites in a program; these are
-typically places where the desired type is explicit or can be dervied by
+typically places where the desired type is explicit or can be derived by
 propagation from explicit types (without type inference). Possible coercion
 sites are:
 
 * `let` statements where an explicit type is given.
 
-    In `let _: U = e;`, `e` is coerced to have type `U`.
+   For example, `128` is coerced to have type `i8` in the following:
+
+   ```rust
+   let _: i8 = 128;
+   ```
 
 * `static` and `const` statements (similar to `let` statements).
 
-* arguments for function calls.
+* Arguments for function calls
 
-    The value being coerced is the
-    actual parameter and it is coerced to the type of the formal parameter. For
-    example, let `foo` be defined as `fn foo(x: U) { ... }` and call it as
-    `foo(e);`. Then `e` is coerced to have type `U`;
+  The value being coerced is the actual parameter, and it is coerced to
+  the type of the formal parameter.
 
-* instantiations of struct or variant fields.
+  For example, `128` is coerced to have type `i8` in the following:
 
-    Assume we have a `struct
-    Foo { x: U }` and instantiate it as `Foo { x: e }`. Then `e` is coerced to
-    have type `U`.
+  ```rust
+  fn bar(_: i8) { }
 
-* function results (either the final line of a block if it is not semicolon
-terminated or any expression in a `return` statement).
+  fn main() {
+     bar(128);
+  }
+  ```
 
-    In `fn foo() -> U { e }`, `e` is coerced to to have type `U`.
+* Instantiations of struct or variant fields
+
+  For example, `128` is coerced to have type `i8` in the following:
+
+  ```rust
+  struct Foo { x: i8 }
+
+  fn main() {
+      Foo { x: 128 };
+  }
+  ```
+
+* Function results, either the final line of a block if it is not
+  semicolon-terminated or any expression in a `return` statement
+
+  For example, `128` is coerced to have type `i8` in the following:
+
+  ```rust
+  fn foo() -> i8 {
+      128
+  }
+  ```
 
 If the expression in one of these coercion sites is a coercion-propagating
 expression, then the relevant sub-expressions in that expression are also
 coercion sites. Propagation recurses from these new coercion sites.
 Propagating expressions and their relevant sub-expressions are:
 
-* array literals, where the array has type `[U; n]`. Each sub-expression in
+* Array literals, where the array has type `[U; n]`. Each sub-expression in
 the array literal is a coercion site for coercion to type `U`.
 
-* array literals with repeating syntax, where the array has type `[U; n]`. The
+* Array literals with repeating syntax, where the array has type `[U; n]`. The
 repeated sub-expression is a coercion site for coercion to type `U`.
 
-* tuples, where a tuple is a coercion site to type `(U_0, U_1, ..., U_n)`.
+* Tuples, where a tuple is a coercion site to type `(U_0, U_1, ..., U_n)`.
 Each sub-expression is a coercion site to the respective type, e.g. the
 zeroth sub-expression is a coercion site to type `U_0`.
 
-* parenthesised sub-expressions (`(e)`). If the expression has type `U`, then
+* Parenthesised sub-expressions (`(e)`): if the expression has type `U`, then
 the sub-expression is a coercion site to `U`.
 
-* blocks. If a block has type `U`, then the last expression in the block (if
+* Blocks: if a block has type `U`, then the last expression in the block (if
 it is not semicolon-terminated) is a coercion site to `U`. This includes
 blocks which are part of control flow statements, such as `if`/`else`, if
 the block has a known type.
@@ -3688,45 +3734,46 @@ the block has a known type.
 
 Coercion is allowed between the following types:
 
-* `T` to `U` if `T` is a subtype of `U` (*reflexive case*).
+* `T` to `U` if `T` is a subtype of `U` (*reflexive case*)
 
 * `T_1` to `T_3` where `T_1` coerces to `T_2` and `T_2` coerces to `T_3`
-(*transitive case*).
+(*transitive case*)
 
     Note that this is not fully supported yet
 
-* `&mut T` to `&T`.
+* `&mut T` to `&T`
 
-* `*mut T` to `*const T`.
+* `*mut T` to `*const T`
 
-* `&T` to `*const T`.
+* `&T` to `*const T`
 
-* `&mut T` to `*mut T`.
+* `&mut T` to `*mut T`
 
 * `&T` to `&U` if `T` implements `Deref<Target = U>`. For example:
 
-```rust
-use std::ops::Deref;
+  ```rust
+  use std::ops::Deref;
 
-struct CharContainer {
-    value: char
-}
+  struct CharContainer {
+      value: char
+  }
 
-impl Deref for CharContainer {
-    type Target = char;
+  impl Deref for CharContainer {
+      type Target = char;
 
-    fn deref<'a>(&'a self) -> &'a char {
-        &self.value
-    }
-}
+      fn deref<'a>(&'a self) -> &'a char {
+          &self.value
+      }
+  }
 
-fn foo(arg: &char) {}
+  fn foo(arg: &char) {}
 
-fn main() {
-    let x = &mut CharContainer { value: 'y' };
-    foo(x); //&mut CharContainer is coerced to &char.
-}
-```
+  fn main() {
+      let x = &mut CharContainer { value: 'y' };
+      foo(x); //&mut CharContainer is coerced to &char.
+  }
+  ```
+
 * `&mut T` to `&mut U` if `T` implements `DerefMut<Target = U>`.
 
 * TyCtor(`T`) to TyCtor(coerce_inner(`T`)), where TyCtor(`T`) is one of
@@ -3940,7 +3987,7 @@ In general, `--crate-type=bin` or `--crate-type=lib` should be sufficient for
 all compilation needs, and the other options are just available if more
 fine-grained control is desired over the output format of a Rust crate.
 
-# Appendix: Rationales and design tradeoffs
+# Appendix: Rationales and design trade-offs
 
 *TODO*.
 
@@ -3950,7 +3997,7 @@ Rust is not a particularly original language, with design elements coming from
 a wide range of sources. Some of these are listed below (including elements
 that have since been removed):
 
-* SML, OCaml: algebraic datatypes, pattern matching, type inference,
+* SML, OCaml: algebraic data types, pattern matching, type inference,
   semicolon statement separation
 * C++: references, RAII, smart pointers, move semantics, monomorphisation,
   memory model

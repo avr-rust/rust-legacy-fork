@@ -19,10 +19,11 @@
 use borrowck::*;
 use borrowck::move_data::MoveData;
 use rustc::middle::expr_use_visitor as euv;
+use rustc::middle::infer;
 use rustc::middle::mem_categorization as mc;
 use rustc::middle::region;
 use rustc::middle::ty;
-use rustc::util::ppaux::Repr;
+
 use syntax::ast;
 use syntax::codemap::Span;
 use syntax::visit;
@@ -49,9 +50,9 @@ pub fn gather_loans_in_fn<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
     };
 
     let param_env = ty::ParameterEnvironment::for_item(bccx.tcx, fn_id);
-
+    let infcx = infer::new_infer_ctxt(bccx.tcx, &bccx.tcx.tables, Some(param_env), false);
     {
-        let mut euv = euv::ExprUseVisitor::new(&mut glcx, &param_env);
+        let mut euv = euv::ExprUseVisitor::new(&mut glcx, &infcx);
         euv.walk_fn(decl, body);
     }
 
@@ -76,8 +77,8 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
                _consume_span: Span,
                cmt: mc::cmt<'tcx>,
                mode: euv::ConsumeMode) {
-        debug!("consume(consume_id={}, cmt={}, mode={:?})",
-               consume_id, cmt.repr(self.tcx()), mode);
+        debug!("consume(consume_id={}, cmt={:?}, mode={:?})",
+               consume_id, cmt, mode);
 
         match mode {
             euv::Move(move_reason) => {
@@ -93,9 +94,9 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
                    matched_pat: &ast::Pat,
                    cmt: mc::cmt<'tcx>,
                    mode: euv::MatchMode) {
-        debug!("matched_pat(matched_pat={}, cmt={}, mode={:?})",
-               matched_pat.repr(self.tcx()),
-               cmt.repr(self.tcx()),
+        debug!("matched_pat(matched_pat={:?}, cmt={:?}, mode={:?})",
+               matched_pat,
+               cmt,
                mode);
 
         if let mc::cat_downcast(..) = cmt.cat {
@@ -109,9 +110,9 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
                    consume_pat: &ast::Pat,
                    cmt: mc::cmt<'tcx>,
                    mode: euv::ConsumeMode) {
-        debug!("consume_pat(consume_pat={}, cmt={}, mode={:?})",
-               consume_pat.repr(self.tcx()),
-               cmt.repr(self.tcx()),
+        debug!("consume_pat(consume_pat={:?}, cmt={:?}, mode={:?})",
+               consume_pat,
+               cmt,
                mode);
 
         match mode {
@@ -132,9 +133,9 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
               bk: ty::BorrowKind,
               loan_cause: euv::LoanCause)
     {
-        debug!("borrow(borrow_id={}, cmt={}, loan_region={:?}, \
+        debug!("borrow(borrow_id={}, cmt={:?}, loan_region={:?}, \
                bk={:?}, loan_cause={:?})",
-               borrow_id, cmt.repr(self.tcx()), loan_region,
+               borrow_id, cmt, loan_region,
                bk, loan_cause);
 
         self.guarantee_valid(borrow_id,
@@ -151,22 +152,10 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
               assignee_cmt: mc::cmt<'tcx>,
               mode: euv::MutateMode)
     {
-        let opt_lp = opt_loan_path(&assignee_cmt);
-        debug!("mutate(assignment_id={}, assignee_cmt={}) opt_lp={:?}",
-               assignment_id, assignee_cmt.repr(self.tcx()), opt_lp);
-
-        match opt_lp {
-            Some(lp) => {
-                gather_moves::gather_assignment(self.bccx, &self.move_data,
-                                                assignment_id, assignment_span,
-                                                lp, assignee_cmt.id, mode);
-            }
-            None => {
-                // This can occur with e.g. `*foo() = 5`.  In such
-                // cases, there is no need to check for conflicts
-                // with moves etc, just ignore.
-            }
-        }
+        self.guarantee_assignment_valid(assignment_id,
+                                        assignment_span,
+                                        assignee_cmt,
+                                        mode);
     }
 
     fn decl_without_init(&mut self, id: ast::NodeId, span: Span) {
@@ -177,7 +166,7 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for GatherLoanCtxt<'a, 'tcx> {
 /// Implements the A-* rules in README.md.
 fn check_aliasability<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
                                 borrow_span: Span,
-                                loan_cause: euv::LoanCause,
+                                loan_cause: AliasableViolationKind,
                                 cmt: mc::cmt<'tcx>,
                                 req_kind: ty::BorrowKind)
                                 -> Result<(),()> {
@@ -191,23 +180,11 @@ fn check_aliasability<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
             /* Uniquely accessible path -- OK for `&` and `&mut` */
             Ok(())
         }
-        (mc::Aliasability::FreelyAliasable(mc::AliasableStatic(safety)), ty::ImmBorrow) => {
-            // Borrow of an immutable static item:
-            match safety {
-                mc::InteriorUnsafe => {
-                    // If the static item contains an Unsafe<T>, it has interior
-                    // mutability.  In such cases, another phase of the compiler
-                    // will ensure that the type is `Sync` and then trans will
-                    // not put it in rodata, so this is ok to allow.
-                    Ok(())
-                }
-                mc::InteriorSafe => {
-                    // Immutable static can be borrowed, no problem.
-                    Ok(())
-                }
-            }
+        (mc::Aliasability::FreelyAliasable(mc::AliasableStatic), ty::ImmBorrow) => {
+            // Borrow of an immutable static item.
+            Ok(())
         }
-        (mc::Aliasability::FreelyAliasable(mc::AliasableStaticMut(..)), _) => {
+        (mc::Aliasability::FreelyAliasable(mc::AliasableStaticMut), _) => {
             // Even touching a static mut is considered unsafe. We assume the
             // user knows what they're doing in these cases.
             Ok(())
@@ -215,7 +192,7 @@ fn check_aliasability<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
         (mc::Aliasability::ImmutableUnique(_), ty::MutBorrow) => {
             bccx.report_aliasability_violation(
                         borrow_span,
-                        BorrowViolation(loan_cause),
+                        loan_cause,
                         mc::AliasableReason::UnaliasableImmutable);
             Err(())
         }
@@ -223,7 +200,7 @@ fn check_aliasability<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
         (mc::Aliasability::FreelyAliasable(alias_cause), ty::MutBorrow) => {
             bccx.report_aliasability_violation(
                         borrow_span,
-                        BorrowViolation(loan_cause),
+                        loan_cause,
                         alias_cause);
             Err(())
         }
@@ -233,8 +210,93 @@ fn check_aliasability<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
     }
 }
 
+/// Implements the M-* rules in README.md.
+fn check_mutability<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
+                              borrow_span: Span,
+                              cause: AliasableViolationKind,
+                              cmt: mc::cmt<'tcx>,
+                              req_kind: ty::BorrowKind)
+                              -> Result<(),()> {
+    debug!("check_mutability(cause={:?} cmt={:?} req_kind={:?}",
+           cause, cmt, req_kind);
+    match req_kind {
+        ty::UniqueImmBorrow | ty::ImmBorrow => {
+            match cmt.mutbl {
+                // I am intentionally leaving this here to help
+                // refactoring if, in the future, we should add new
+                // kinds of mutability.
+                mc::McImmutable | mc::McDeclared | mc::McInherited => {
+                    // both imm and mut data can be lent as imm;
+                    // for mutable data, this is a freeze
+                    Ok(())
+                }
+            }
+        }
+
+        ty::MutBorrow => {
+            // Only mutable data can be lent as mutable.
+            if !cmt.mutbl.is_mutable() {
+                Err(bccx.report(BckError { span: borrow_span,
+                                           cause: cause,
+                                           cmt: cmt,
+                                           code: err_mutbl }))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
     pub fn tcx(&self) -> &'a ty::ctxt<'tcx> { self.bccx.tcx }
+
+    /// Guarantees that `cmt` is assignable, or reports an error.
+    fn guarantee_assignment_valid(&mut self,
+                                  assignment_id: ast::NodeId,
+                                  assignment_span: Span,
+                                  cmt: mc::cmt<'tcx>,
+                                  mode: euv::MutateMode) {
+
+        let opt_lp = opt_loan_path(&cmt);
+        debug!("guarantee_assignment_valid(assignment_id={}, cmt={:?}) opt_lp={:?}",
+               assignment_id, cmt, opt_lp);
+
+        if let mc::cat_local(..) = cmt.cat {
+            // Only re-assignments to locals require it to be
+            // mutable - this is checked in check_loans.
+        } else {
+            // Check that we don't allow assignments to non-mutable data.
+            if check_mutability(self.bccx, assignment_span, MutabilityViolation,
+                                cmt.clone(), ty::MutBorrow).is_err() {
+                return; // reported an error, no sense in reporting more.
+            }
+        }
+
+        // Check that we don't allow assignments to aliasable data
+        if check_aliasability(self.bccx, assignment_span, MutabilityViolation,
+                              cmt.clone(), ty::MutBorrow).is_err() {
+            return; // reported an error, no sense in reporting more.
+        }
+
+        match opt_lp {
+            Some(lp) => {
+                if let mc::cat_local(..) = cmt.cat {
+                    // Only re-assignments to locals require it to be
+                    // mutable - this is checked in check_loans.
+                } else {
+                    self.mark_loan_path_as_mutated(&lp);
+                }
+                gather_moves::gather_assignment(self.bccx, &self.move_data,
+                                                assignment_id, assignment_span,
+                                                lp, cmt.id, mode);
+            }
+            None => {
+                // This can occur with e.g. `*foo() = 5`.  In such
+                // cases, there is no need to check for conflicts
+                // with moves etc, just ignore.
+            }
+        }
+    }
 
     /// Guarantees that `addr_of(cmt)` will be valid for the duration of `static_scope_r`, or
     /// reports an error.  This may entail taking out loans, which will be added to the
@@ -246,10 +308,10 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
                        req_kind: ty::BorrowKind,
                        loan_region: ty::Region,
                        cause: euv::LoanCause) {
-        debug!("guarantee_valid(borrow_id={}, cmt={}, \
+        debug!("guarantee_valid(borrow_id={}, cmt={:?}, \
                 req_mutbl={:?}, loan_region={:?})",
                borrow_id,
-               cmt.repr(self.tcx()),
+               cmt,
                req_kind,
                loan_region);
 
@@ -268,13 +330,13 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
         }
 
         // Check that we don't allow mutable borrows of non-mutable data.
-        if check_mutability(self.bccx, borrow_span, cause,
+        if check_mutability(self.bccx, borrow_span, BorrowViolation(cause),
                             cmt.clone(), req_kind).is_err() {
             return; // reported an error, no sense in reporting more.
         }
 
         // Check that we don't allow mutable borrows of aliasable data.
-        if check_aliasability(self.bccx, borrow_span, cause,
+        if check_aliasability(self.bccx, borrow_span, BorrowViolation(cause),
                               cmt.clone(), req_kind).is_err() {
             return; // reported an error, no sense in reporting more.
         }
@@ -348,8 +410,8 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
             }
         };
 
-        debug!("guarantee_valid(borrow_id={}), loan={}",
-               borrow_id, loan.repr(self.tcx()));
+        debug!("guarantee_valid(borrow_id={}), loan={:?}",
+               borrow_id, loan);
 
         // let loan_path = loan.loan_path;
         // let loan_gen_scope = loan.gen_scope;
@@ -380,43 +442,6 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
             //        restrictions: restrictions
             //    }
         // }
-
-        fn check_mutability<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
-                                      borrow_span: Span,
-                                      cause: euv::LoanCause,
-                                      cmt: mc::cmt<'tcx>,
-                                      req_kind: ty::BorrowKind)
-                                      -> Result<(),()> {
-            //! Implements the M-* rules in README.md.
-            debug!("check_mutability(cause={:?} cmt={} req_kind={:?}",
-                   cause, cmt.repr(bccx.tcx), req_kind);
-            match req_kind {
-                ty::UniqueImmBorrow | ty::ImmBorrow => {
-                    match cmt.mutbl {
-                        // I am intentionally leaving this here to help
-                        // refactoring if, in the future, we should add new
-                        // kinds of mutability.
-                        mc::McImmutable | mc::McDeclared | mc::McInherited => {
-                            // both imm and mut data can be lent as imm;
-                            // for mutable data, this is a freeze
-                            Ok(())
-                        }
-                    }
-                }
-
-                ty::MutBorrow => {
-                    // Only mutable data can be lent as mutable.
-                    if !cmt.mutbl.is_mutable() {
-                        Err(bccx.report(BckError { span: borrow_span,
-                                                   cause: cause,
-                                                   cmt: cmt,
-                                                   code: err_mutbl }))
-                    } else {
-                        Ok(())
-                    }
-                }
-            }
-        }
     }
 
     pub fn mark_loan_path_as_mutated(&self, loan_path: &LoanPath) {
@@ -502,12 +527,13 @@ struct StaticInitializerCtxt<'a, 'tcx: 'a> {
 impl<'a, 'tcx, 'v> Visitor<'v> for StaticInitializerCtxt<'a, 'tcx> {
     fn visit_expr(&mut self, ex: &Expr) {
         if let ast::ExprAddrOf(mutbl, ref base) = ex.node {
-            let param_env = ty::empty_parameter_environment(self.bccx.tcx);
-            let mc = mc::MemCategorizationContext::new(&param_env);
+            let infcx = infer::new_infer_ctxt(self.bccx.tcx, &self.bccx.tcx.tables, None, false);
+            let mc = mc::MemCategorizationContext::new(&infcx);
             let base_cmt = mc.cat_expr(&**base).unwrap();
             let borrow_kind = ty::BorrowKind::from_mutbl(mutbl);
             // Check that we don't allow borrows of unsafe static items.
-            if check_aliasability(self.bccx, ex.span, euv::AddrOf,
+            if check_aliasability(self.bccx, ex.span,
+                                  BorrowViolation(euv::AddrOf),
                                   base_cmt, borrow_kind).is_err() {
                 return; // reported an error, no sense in reporting more.
             }
@@ -519,7 +545,7 @@ impl<'a, 'tcx, 'v> Visitor<'v> for StaticInitializerCtxt<'a, 'tcx> {
 
 pub fn gather_loans_in_static_initializer(bccx: &mut BorrowckCtxt, expr: &ast::Expr) {
 
-    debug!("gather_loans_in_static_initializer(expr={})", expr.repr(bccx.tcx));
+    debug!("gather_loans_in_static_initializer(expr={:?})", expr);
 
     let mut sicx = StaticInitializerCtxt {
         bccx: bccx

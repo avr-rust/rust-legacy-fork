@@ -13,8 +13,9 @@ use metadata::csearch;
 use middle::def::DefFn;
 use middle::subst::{Subst, Substs, EnumeratedItems};
 use middle::ty::{TransmuteRestriction, ctxt, TyBareFn};
-use middle::ty::{self, Ty};
-use util::ppaux::Repr;
+use middle::ty::{self, Ty, HasTypeFlags};
+
+use std::fmt;
 
 use syntax::abi::RustIntrinsic;
 use syntax::ast::DefId;
@@ -29,7 +30,7 @@ pub fn check_crate(tcx: &ctxt) {
         tcx: tcx,
         param_envs: Vec::new(),
         dummy_sized_ty: tcx.types.isize,
-        dummy_unsized_ty: ty::mk_vec(tcx, tcx.types.isize, None),
+        dummy_unsized_ty: tcx.mk_slice(tcx.types.isize),
     };
     visit::walk_crate(&mut visitor, tcx.map.krate());
 }
@@ -53,7 +54,7 @@ struct IntrinsicCheckingVisitor<'a, 'tcx: 'a> {
 
 impl<'a, 'tcx> IntrinsicCheckingVisitor<'a, 'tcx> {
     fn def_id_is_transmute(&self, def_id: DefId) -> bool {
-        let intrinsic = match ty::lookup_item_type(self.tcx, def_id).ty.sty {
+        let intrinsic = match self.tcx.lookup_item_type(def_id).ty.sty {
             ty::TyBareFn(_, ref bfty) => bfty.abi == RustIntrinsic,
             _ => return false
         };
@@ -91,8 +92,8 @@ impl<'a, 'tcx> IntrinsicCheckingVisitor<'a, 'tcx> {
 
         // Simple case: no type parameters involved.
         if
-            !ty::type_has_params(from) && !ty::type_has_self(from) &&
-            !ty::type_has_params(to) && !ty::type_has_self(to)
+            !from.has_param_types() && !from.has_self_ty() &&
+            !to.has_param_types() && !to.has_self_ty()
         {
             let restriction = TransmuteRestriction {
                 span: span,
@@ -159,8 +160,8 @@ impl<'a, 'tcx> IntrinsicCheckingVisitor<'a, 'tcx> {
         // In all cases, we keep the original unsubstituted types
         // around for error reporting.
 
-        let from_tc = ty::type_contents(self.tcx, from);
-        let to_tc = ty::type_contents(self.tcx, to);
+        let from_tc = from.type_contents(self.tcx);
+        let to_tc = to.type_contents(self.tcx);
         if from_tc.interior_param() || to_tc.interior_param() {
             span_err!(self.tcx.sess, span, E0139,
                       "cannot transmute to or from a type that contains \
@@ -202,17 +203,17 @@ impl<'a, 'tcx> IntrinsicCheckingVisitor<'a, 'tcx> {
 
         match types_in_scope.next() {
             None => {
-                debug!("with_each_combination(substs={})",
-                       substs.repr(self.tcx));
+                debug!("with_each_combination(substs={:?})",
+                       substs);
 
                 callback(substs);
             }
 
             Some((space, index, &param_ty)) => {
-                debug!("with_each_combination: space={:?}, index={}, param_ty={}",
-                       space, index, param_ty.repr(self.tcx));
+                debug!("with_each_combination: space={:?}, index={}, param_ty={:?}",
+                       space, index, param_ty);
 
-                if !ty::type_is_sized(Some(param_env), self.tcx, span, param_ty) {
+                if !param_ty.is_sized(param_env, span) {
                     debug!("with_each_combination: param_ty is not known to be sized");
 
                     substs.types.get_mut_slice(space)[index] = self.dummy_unsized_ty;
@@ -228,7 +229,7 @@ impl<'a, 'tcx> IntrinsicCheckingVisitor<'a, 'tcx> {
     }
 
     fn push_transmute_restriction(&self, restriction: TransmuteRestriction<'tcx>) {
-        debug!("Pushing transmute restriction: {}", restriction.repr(self.tcx));
+        debug!("Pushing transmute restriction: {:?}", restriction);
         self.tcx.transmute_restrictions.borrow_mut().push(restriction);
     }
 }
@@ -252,9 +253,9 @@ impl<'a, 'tcx, 'v> Visitor<'v> for IntrinsicCheckingVisitor<'a, 'tcx> {
 
     fn visit_expr(&mut self, expr: &ast::Expr) {
         if let ast::ExprPath(..) = expr.node {
-            match ty::resolve_expr(self.tcx, expr) {
+            match self.tcx.resolve_expr(expr) {
                 DefFn(did, _) if self.def_id_is_transmute(did) => {
-                    let typ = ty::node_id_to_type(self.tcx, expr.id);
+                    let typ = self.tcx.node_id_to_type(expr.id);
                     match typ.sty {
                         TyBareFn(_, ref bare_fn_ty) if bare_fn_ty.abi == RustIntrinsic => {
                             if let ty::FnConverging(to) = bare_fn_ty.sig.0.output {
@@ -277,13 +278,13 @@ impl<'a, 'tcx, 'v> Visitor<'v> for IntrinsicCheckingVisitor<'a, 'tcx> {
     }
 }
 
-impl<'tcx> Repr<'tcx> for TransmuteRestriction<'tcx> {
-    fn repr(&self, tcx: &ty::ctxt<'tcx>) -> String {
-        format!("TransmuteRestriction(id={}, original=({},{}), substituted=({},{}))",
-                self.id,
-                self.original_from.repr(tcx),
-                self.original_to.repr(tcx),
-                self.substituted_from.repr(tcx),
-                self.substituted_to.repr(tcx))
+impl<'tcx> fmt::Debug for TransmuteRestriction<'tcx> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "TransmuteRestriction(id={}, original=({:?},{:?}), substituted=({:?},{:?}))",
+               self.id,
+               self.original_from,
+               self.original_to,
+               self.substituted_from,
+               self.substituted_to)
     }
 }

@@ -25,6 +25,7 @@ pub enum Os {
     OsiOS,
     OsDragonfly,
     OsBitrig,
+    OsNetbsd,
     OsOpenbsd,
     OsNone,
 }
@@ -140,6 +141,7 @@ impl fmt::Display for Os {
             OsFreebsd => "freebsd".fmt(f),
             OsDragonfly => "dragonfly".fmt(f),
             OsBitrig => "bitrig".fmt(f),
+            OsNetbsd => "netbsd".fmt(f),
             OsOpenbsd => "openbsd".fmt(f),
             OsNone => "none".fmt(f),
         }

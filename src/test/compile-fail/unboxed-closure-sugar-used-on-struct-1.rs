@@ -18,7 +18,6 @@ struct Bar<A> {
 fn bar() {
     let x: Box<Bar()> = panic!();
     //~^ ERROR parenthesized parameters may only be used with a trait
-    //~^^ ERROR associated type bindings are not allowed here
 }
 
 fn main() { }

@@ -49,15 +49,13 @@
 //! the raw pointer. It doesn't destroy `T` or deallocate any memory.
 //!
 //! ```
-//! # #![feature(alloc)]
-//! use std::boxed;
+//! # #![feature(box_raw)]
+//! let my_speed: Box<i32> = Box::new(88);
+//! let my_speed: *mut i32 = Box::into_raw(my_speed);
 //!
+//! // By taking ownership of the original `Box<T>` though
+//! // we are obligated to put it together later to be destroyed.
 //! unsafe {
-//!     let my_speed: Box<i32> = Box::new(88);
-//!     let my_speed: *mut i32 = boxed::into_raw(my_speed);
-//!
-//!     // By taking ownership of the original `Box<T>` though
-//!     // we are obligated to put it together later to be destroyed.
 //!     drop(Box::from_raw(my_speed));
 //! }
 //! ```
@@ -204,7 +202,7 @@ pub unsafe fn read<T>(src: *const T) -> T {
 ///
 /// This is unsafe for the same reasons that `read` is unsafe.
 #[inline(always)]
-#[unstable(feature = "core",
+#[unstable(feature = "read_and_zero",
            reason = "may play a larger role in std::ptr future extensions")]
 pub unsafe fn read_and_zero<T>(dest: *mut T) -> T {
     // Copy the data out from `dest`:
@@ -219,7 +217,7 @@ pub unsafe fn read_and_zero<T>(dest: *mut T) -> T {
 /// Variant of read_and_zero that writes the specific drop-flag byte
 /// (which may be more appropriate than zero).
 #[inline(always)]
-#[unstable(feature = "core",
+#[unstable(feature = "filling_drop",
            reason = "may play a larger role in std::ptr future extensions")]
 pub unsafe fn read_and_drop<T>(dest: *mut T) -> T {
     // Copy the data out from `dest`:
@@ -267,9 +265,10 @@ impl<T: ?Sized> *const T {
     /// null-safety, it is important to note that this is still an unsafe
     /// operation because the returned value could be pointing to invalid
     /// memory.
-    #[unstable(feature = "core",
-               reason = "Option is not clearly the right return type, and we may want \
-                         to tie the return lifetime to a borrow of the raw pointer")]
+    #[unstable(feature = "ptr_as_ref",
+               reason = "Option is not clearly the right return type, and we \
+                         may want to tie the return lifetime to a borrow of \
+                         the raw pointer")]
     #[inline]
     pub unsafe fn as_ref<'a>(&self) -> Option<&'a T> where T: Sized {
         if self.is_null() {
@@ -314,9 +313,10 @@ impl<T: ?Sized> *mut T {
     /// null-safety, it is important to note that this is still an unsafe
     /// operation because the returned value could be pointing to invalid
     /// memory.
-    #[unstable(feature = "core",
-               reason = "Option is not clearly the right return type, and we may want \
-                         to tie the return lifetime to a borrow of the raw pointer")]
+    #[unstable(feature = "ptr_as_ref",
+               reason = "Option is not clearly the right return type, and we \
+                         may want to tie the return lifetime to a borrow of \
+                         the raw pointer")]
     #[inline]
     pub unsafe fn as_ref<'a>(&self) -> Option<&'a T> where T: Sized {
         if self.is_null() {
@@ -347,7 +347,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// As with `as_ref`, this is unsafe because it cannot verify the validity
     /// of the returned pointer.
-    #[unstable(feature = "core",
+    #[unstable(feature = "ptr_as_ref",
                reason = "return value does not necessarily convey all possible \
                          information")]
     #[inline]
@@ -507,9 +507,14 @@ impl<T: ?Sized> PartialOrd for *mut T {
 /// modified without a unique path to the `Unique` reference. Useful
 /// for building abstractions like `Vec<T>` or `Box<T>`, which
 /// internally use raw pointers to manage the memory that they own.
-#[unstable(feature = "unique")]
+#[unstable(feature = "unique", reason = "needs an RFC to flesh out design")]
 pub struct Unique<T: ?Sized> {
     pointer: NonZero<*const T>,
+    // NOTE: this marker has no consequences for variance, but is necessary
+    // for dropck to understand that we logically own a `T`.
+    //
+    // For details, see:
+    // https://github.com/rust-lang/rfcs/blob/master/text/0769-sound-generic-drop.md#phantom-data
     _marker: PhantomData<T>,
 }
 
@@ -527,21 +532,19 @@ unsafe impl<T: Send + ?Sized> Send for Unique<T> { }
 #[unstable(feature = "unique")]
 unsafe impl<T: Sync + ?Sized> Sync for Unique<T> { }
 
+#[unstable(feature = "unique")]
 impl<T: ?Sized> Unique<T> {
     /// Creates a new `Unique`.
-    #[unstable(feature = "unique")]
     pub unsafe fn new(ptr: *mut T) -> Unique<T> {
         Unique { pointer: NonZero::new(ptr), _marker: PhantomData }
     }
 
     /// Dereferences the content.
-    #[unstable(feature = "unique")]
     pub unsafe fn get(&self) -> &T {
         &**self.pointer
     }
 
     /// Mutably dereferences the content.
-    #[unstable(feature = "unique")]
     pub unsafe fn get_mut(&mut self) -> &mut T {
         &mut ***self
     }

@@ -24,14 +24,18 @@ use num::FpCategory as Fp;
 use num::{Float, ParseFloatError};
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const RADIX: u32 = 2;
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const MANTISSA_DIGITS: u32 = 53;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const DIGITS: u32 = 15;
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const EPSILON: f64 = 2.2204460492503131e-16_f64;
 
 /// Smallest finite f64 value
@@ -45,20 +49,27 @@ pub const MIN_POSITIVE: f64 = 2.2250738585072014e-308_f64;
 pub const MAX: f64 = 1.7976931348623157e+308_f64;
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const MIN_EXP: i32 = -1021;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const MAX_EXP: i32 = 1024;
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const MIN_10_EXP: i32 = -307;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const MAX_10_EXP: i32 = 308;
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const NAN: f64 = 0.0_f64/0.0_f64;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const INFINITY: f64 = 1.0_f64/0.0_f64;
 #[stable(feature = "rust1", since = "1.0.0")]
+#[allow(missing_docs)]
 pub const NEG_INFINITY: f64 = -1.0_f64/0.0_f64;
 
 /// Basic mathematial constants.
@@ -71,7 +82,9 @@ pub mod consts {
     pub const PI: f64 = 3.14159265358979323846264338327950288_f64;
 
     /// pi * 2.0
-    #[unstable(feature = "core", reason = "unclear naming convention/usefulness")]
+    #[unstable(feature = "float_consts",
+               reason = "unclear naming convention/usefulness")]
+    #[deprecated(since = "1.2.0", reason = "unclear on usefulness")]
     pub const PI_2: f64 = 6.28318530717958647692528676655900576_f64;
 
     /// pi/2.0
@@ -135,7 +148,6 @@ pub mod consts {
     pub const LN_10: f64 = 2.30258509299404568401799145468436421_f64;
 }
 
-#[unstable(feature = "core", reason = "trait is unstable")]
 impl Float for f64 {
     #[inline]
     fn nan() -> f64 { NAN }

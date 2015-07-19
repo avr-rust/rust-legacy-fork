@@ -50,6 +50,8 @@ is very wrong. Wrong enough that we can't continue with things in the current
 state. Another example is using the `unreachable!()` macro:
 
 ```rust,ignore
+use Event::NewRelease;
+
 enum Event {
     NewRelease,
 }
@@ -71,7 +73,7 @@ fn descriptive_probability(event: Event) -> &'static str {
 }
 
 fn main() {
-    std::io::println(descriptive_probability(NewRelease));
+    println!("{}", descriptive_probability(NewRelease));
 }
 ```
 
@@ -225,9 +227,9 @@ There's another way of doing this that's a bit nicer than `unwrap()`:
 
 ```rust,ignore
 let mut buffer = String::new();
-let input = io::stdin().read_line(&mut buffer)
-                       .ok()
-                       .expect("Failed to read line");
+let num_bytes_read = io::stdin().read_line(&mut buffer)
+                                .ok()
+                                .expect("Failed to read line");
 ```
 
 `ok()` converts the `Result` into an `Option`, and `expect()` does the same

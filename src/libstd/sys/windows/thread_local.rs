@@ -12,7 +12,6 @@ use prelude::v1::*;
 
 use libc::types::os::arch::extra::{DWORD, LPVOID, BOOL};
 
-use boxed;
 use ptr;
 use rt;
 use sys_common::mutex::Mutex;
@@ -143,7 +142,7 @@ unsafe fn init_dtors() {
         DTOR_LOCK.unlock();
     });
     if res.is_ok() {
-        DTORS = boxed::into_raw(dtors);
+        DTORS = Box::into_raw(dtors);
     } else {
         DTORS = 1 as *mut _;
     }
@@ -222,8 +221,8 @@ unsafe fn unregister_dtor(key: Key) -> bool {
 //
 // # The article mentions crazy stuff about "/INCLUDE"?
 //
-// It sure does! This seems to work for now, so maybe we'll just run into
-// that if we start linking with msvc?
+// It sure does! We include it below for MSVC targets, but it look like for GNU
+// targets we don't require it.
 
 #[link_section = ".CRT$XLB"]
 #[linkage = "external"]
@@ -231,6 +230,10 @@ unsafe fn unregister_dtor(key: Key) -> bool {
 pub static p_thread_callback: unsafe extern "system" fn(LPVOID, DWORD,
                                                         LPVOID) =
         on_tls_callback;
+
+#[cfg(target_env = "msvc")]
+#[link_args = "/INCLUDE:_tls_used"]
+extern {}
 
 #[allow(warnings)]
 unsafe extern "system" fn on_tls_callback(h: LPVOID,

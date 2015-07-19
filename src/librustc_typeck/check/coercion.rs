@@ -66,10 +66,9 @@ use middle::infer::{self, Coercion};
 use middle::traits::{self, ObligationCause};
 use middle::traits::{predicate_for_trait_def, report_selection_error};
 use middle::ty::{AutoDerefRef, AdjustDerefRef};
-use middle::ty::{self, mt, Ty};
+use middle::ty::{self, TypeAndMut, Ty, TypeError};
 use middle::ty_relate::RelateResult;
 use util::common::indent;
-use util::ppaux::Repr;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -104,9 +103,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
               a: Ty<'tcx>,
               b: Ty<'tcx>)
               -> CoerceResult<'tcx> {
-        debug!("Coerce.tys({} => {})",
-               a.repr(self.tcx()),
-               b.repr(self.tcx()));
+        debug!("Coerce.tys({:?} => {:?})",
+               a,
+               b);
 
         // Consider coercing the subtype to a DST
         let unsize = self.unpack_actual_value(a, |a| {
@@ -166,9 +165,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                                b: Ty<'tcx>,
                                mutbl_b: ast::Mutability)
                                -> CoerceResult<'tcx> {
-        debug!("coerce_borrowed_pointer(a={}, b={})",
-               a.repr(self.tcx()),
-               b.repr(self.tcx()));
+        debug!("coerce_borrowed_pointer(a={:?}, b={:?})",
+               a,
+               b);
 
         // If we have a parameter of type `&M T_a` and the value
         // provided is `expr`, we will be adding an implicit borrow,
@@ -202,8 +201,8 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 // &T to autoref to &&T.
                 return None;
             }
-            let ty = ty::mk_rptr(self.tcx(), r_borrow,
-                                 mt {ty: inner_ty, mutbl: mutbl_b});
+            let ty = self.tcx().mk_ref(r_borrow,
+                                        TypeAndMut {ty: inner_ty, mutbl: mutbl_b});
             if let Err(err) = self.subtype(ty, b) {
                 if first_error.is_none() {
                     first_error = Some(err);
@@ -238,9 +237,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                       source: Ty<'tcx>,
                       target: Ty<'tcx>)
                       -> CoerceResult<'tcx> {
-        debug!("coerce_unsized(source={}, target={})",
-               source.repr(self.tcx()),
-               target.repr(self.tcx()));
+        debug!("coerce_unsized(source={:?}, target={:?})",
+               source,
+               target);
 
         let traits = (self.tcx().lang_items.unsize_trait(),
                       self.tcx().lang_items.coerce_unsized_trait());
@@ -248,7 +247,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             (u, cu)
         } else {
             debug!("Missing Unsize or CoerceUnsized traits");
-            return Err(ty::terr_mismatch);
+            return Err(TypeError::Mismatch);
         };
 
         // Note, we want to avoid unnecessary unsizing. We don't want to coerce to
@@ -272,9 +271,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             }
             _ => (source, None)
         };
-        let source = ty::adjust_ty_for_autoref(self.tcx(), source, reborrow);
+        let source = source.adjust_for_autoref(self.tcx(), reborrow);
 
-        let mut selcx = traits::SelectionContext::new(self.fcx.infcx(), self.fcx);
+        let mut selcx = traits::SelectionContext::new(self.fcx.infcx());
 
         // Use a FIFO queue for this custom fulfillment procedure.
         let mut queue = VecDeque::new();
@@ -294,7 +293,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         // inference might unify those two inner type variables later.
         let traits = [coerce_unsized_did, unsize_did];
         while let Some(obligation) = queue.pop_front() {
-            debug!("coerce_unsized resolve step: {}", obligation.repr(self.tcx()));
+            debug!("coerce_unsized resolve step: {:?}", obligation);
             let trait_ref =  match obligation.predicate {
                 ty::Predicate::Trait(ref tr) if traits.contains(&tr.def_id()) => {
                     tr.clone()
@@ -308,7 +307,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 // Uncertain or unimplemented.
                 Ok(None) | Err(traits::Unimplemented) => {
                     debug!("coerce_unsized: early return - can't prove obligation");
-                    return Err(ty::terr_mismatch);
+                    return Err(TypeError::Mismatch);
                 }
 
                 // Object safety violations or miscellaneous.
@@ -336,7 +335,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             autoref: reborrow,
             unsize: Some(target)
         };
-        debug!("Success, coerced with {}", adjustment.repr(self.tcx()));
+        debug!("Success, coerced with {:?}", adjustment);
         Ok(Some(AdjustDerefRef(adjustment)))
     }
 
@@ -352,8 +351,8 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
          */
 
         self.unpack_actual_value(b, |b| {
-            debug!("coerce_from_fn_pointer(a={}, b={})",
-                   a.repr(self.tcx()), b.repr(self.tcx()));
+            debug!("coerce_from_fn_pointer(a={:?}, b={:?})",
+                   a, b);
 
             if let ty::TyBareFn(None, fn_ty_b) = b.sty {
                 match (fn_ty_a.unsafety, fn_ty_b.unsafety) {
@@ -380,12 +379,12 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
          */
 
         self.unpack_actual_value(b, |b| {
-            debug!("coerce_from_fn_item(a={}, b={})",
-                   a.repr(self.tcx()), b.repr(self.tcx()));
+            debug!("coerce_from_fn_item(a={:?}, b={:?})",
+                   a, b);
 
             match b.sty {
                 ty::TyBareFn(None, _) => {
-                    let a_fn_pointer = ty::mk_bare_fn(self.tcx(), None, fn_ty_a);
+                    let a_fn_pointer = self.tcx().mk_fn(None, fn_ty_a);
                     try!(self.subtype(a_fn_pointer, b));
                     Ok(Some(ty::AdjustReifyFnPointer))
                 }
@@ -399,9 +398,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                          b: Ty<'tcx>,
                          mutbl_b: ast::Mutability)
                          -> CoerceResult<'tcx> {
-        debug!("coerce_unsafe_ptr(a={}, b={})",
-               a.repr(self.tcx()),
-               b.repr(self.tcx()));
+        debug!("coerce_unsafe_ptr(a={:?}, b={:?})",
+               a,
+               b);
 
         let (is_ref, mt_a) = match a.sty {
             ty::TyRef(_, mt) => (true, mt),
@@ -412,7 +411,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         };
 
         // Check that the types which they point at are compatible.
-        let a_unsafe = ty::mk_ptr(self.tcx(), ty::mt{ mutbl: mutbl_b, ty: mt_a.ty });
+        let a_unsafe = self.tcx().mk_ptr(ty::TypeAndMut{ mutbl: mutbl_b, ty: mt_a.ty });
         try!(self.subtype(a_unsafe, b));
         try!(coerce_mutbls(mt_a.mutbl, mutbl_b));
 
@@ -436,7 +435,7 @@ pub fn mk_assignty<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
                              a: Ty<'tcx>,
                              b: Ty<'tcx>)
                              -> RelateResult<'tcx, ()> {
-    debug!("mk_assignty({} -> {})", a.repr(fcx.tcx()), b.repr(fcx.tcx()));
+    debug!("mk_assignty({:?} -> {:?})", a, b);
     let mut unsizing_obligations = vec![];
     let adjustment = try!(indent(|| {
         fcx.infcx().commit_if_ok(|_| {
@@ -460,7 +459,7 @@ pub fn mk_assignty<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
     }
 
     if let Some(adjustment) = adjustment {
-        debug!("Success, coerced with {}", adjustment.repr(fcx.tcx()));
+        debug!("Success, coerced with {:?}", adjustment);
         fcx.write_adjustment(expr.id, adjustment);
     }
     Ok(())
@@ -473,6 +472,6 @@ fn coerce_mutbls<'tcx>(from_mutbl: ast::Mutability,
         (ast::MutMutable, ast::MutMutable) |
         (ast::MutImmutable, ast::MutImmutable) |
         (ast::MutMutable, ast::MutImmutable) => Ok(None),
-        (ast::MutImmutable, ast::MutMutable) => Err(ty::terr_mutability)
+        (ast::MutImmutable, ast::MutMutable) => Err(TypeError::Mutability)
     }
 }

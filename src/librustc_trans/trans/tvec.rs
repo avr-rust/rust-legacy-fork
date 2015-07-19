@@ -28,7 +28,6 @@ use trans::machine::llsize_of_alloc;
 use trans::type_::Type;
 use trans::type_of;
 use middle::ty::{self, Ty};
-use util::ppaux::ty_to_string;
 
 use syntax::ast;
 use syntax::parse::token::InternedString;
@@ -42,7 +41,7 @@ struct VecTypes<'tcx> {
 impl<'tcx> VecTypes<'tcx> {
     pub fn to_string<'a>(&self, ccx: &CrateContext<'a, 'tcx>) -> String {
         format!("VecTypes {{unit_ty={}, llunit_ty={}}}",
-                ty_to_string(ccx.tcx(), self.unit_ty),
+                self.unit_ty,
                 ccx.tn().type_to_string(self.llunit_ty))
     }
 }
@@ -58,8 +57,8 @@ pub fn trans_fixed_vstore<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     // to store the array of the suitable size, so all we have to do is
     // generate the content.
 
-    debug!("trans_fixed_vstore(expr={}, dest={})",
-           bcx.expr_to_string(expr), dest.to_string(bcx.ccx()));
+    debug!("trans_fixed_vstore(expr={:?}, dest={})",
+           expr, dest.to_string(bcx.ccx()));
 
     let vt = vec_types_from_expr(bcx, expr);
 
@@ -85,8 +84,8 @@ pub fn trans_slice_vec<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let ccx = fcx.ccx;
     let mut bcx = bcx;
 
-    debug!("trans_slice_vec(slice_expr={})",
-           bcx.expr_to_string(slice_expr));
+    debug!("trans_slice_vec(slice_expr={:?})",
+           slice_expr);
 
     let vec_ty = node_id_type(bcx, slice_expr.id);
 
@@ -107,9 +106,7 @@ pub fn trans_slice_vec<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let count = elements_required(bcx, content_expr);
     debug!("    vt={}, count={}", vt.to_string(ccx), count);
 
-    let fixed_ty = ty::mk_vec(bcx.tcx(),
-                              vt.unit_ty,
-                              Some(count));
+    let fixed_ty = bcx.tcx().mk_array(vt.unit_ty, count);
     let llfixed_ty = type_of::type_of(bcx.ccx(), fixed_ty);
 
     // Always create an alloca even if zero-sized, to preserve
@@ -139,8 +136,8 @@ pub fn trans_lit_str<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                                  str_lit: InternedString,
                                  dest: Dest)
                                  -> Block<'blk, 'tcx> {
-    debug!("trans_lit_str(lit_expr={}, dest={})",
-           bcx.expr_to_string(lit_expr),
+    debug!("trans_lit_str(lit_expr={:?}, dest={})",
+           lit_expr,
            dest.to_string(bcx.ccx()));
 
     match dest {
@@ -167,10 +164,10 @@ fn write_content<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let fcx = bcx.fcx;
     let mut bcx = bcx;
 
-    debug!("write_content(vt={}, dest={}, vstore_expr={})",
+    debug!("write_content(vt={}, dest={}, vstore_expr={:?})",
            vt.to_string(bcx.ccx()),
            dest.to_string(bcx.ccx()),
-           bcx.expr_to_string(vstore_expr));
+           vstore_expr);
 
     match content_expr.node {
         ast::ExprLit(ref lit) => {
@@ -228,7 +225,7 @@ fn write_content<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                     return expr::trans_into(bcx, &**element, Ignore);
                 }
                 SaveIn(lldest) => {
-                    match ty::eval_repeat_count(bcx.tcx(), &**count_expr) {
+                    match bcx.tcx().eval_repeat_count(&**count_expr) {
                         0 => expr::trans_into(bcx, &**element, Ignore),
                         1 => expr::trans_into(bcx, &**element, SaveIn(lldest)),
                         count => {
@@ -254,7 +251,7 @@ fn write_content<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 fn vec_types_from_expr<'blk, 'tcx>(bcx: Block<'blk, 'tcx>, vec_expr: &ast::Expr)
                                    -> VecTypes<'tcx> {
     let vec_ty = node_id_type(bcx, vec_expr.id);
-    vec_types(bcx, ty::sequence_element_type(bcx.tcx(), vec_ty))
+    vec_types(bcx, vec_ty.sequence_element_type(bcx.tcx()))
 }
 
 fn vec_types<'blk, 'tcx>(bcx: Block<'blk, 'tcx>, unit_ty: Ty<'tcx>)
@@ -280,7 +277,7 @@ fn elements_required(bcx: Block, content_expr: &ast::Expr) -> usize {
         },
         ast::ExprVec(ref es) => es.len(),
         ast::ExprRepeat(_, ref count_expr) => {
-            ty::eval_repeat_count(bcx.tcx(), &**count_expr)
+            bcx.tcx().eval_repeat_count(&**count_expr)
         }
         _ => bcx.tcx().sess.span_bug(content_expr.span,
                                      "unexpected vec content")
@@ -318,7 +315,7 @@ pub fn get_base_and_len<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
         }
 
         // Only used for pattern matching.
-        ty::TyBox(ty) | ty::TyRef(_, ty::mt{ty, ..}) => {
+        ty::TyBox(ty) | ty::TyRef(_, ty::TypeAndMut{ty, ..}) => {
             let inner = if type_is_sized(bcx.tcx(), ty) {
                 Load(bcx, llval)
             } else {

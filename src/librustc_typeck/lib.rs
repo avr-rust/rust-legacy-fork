@@ -75,14 +75,20 @@ This API is completely unstable and subject to change.
 
 #![allow(non_camel_case_types)]
 
+#![feature(append)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(collections, collections_drain)]
-#![feature(core)]
+#![feature(drain)]
+#![feature(iter_cmp)]
+#![feature(iter_arith)]
 #![feature(quote)]
+#![feature(ref_slice)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
+#![feature(slice_splits)]
 #![feature(staged_api)]
+#![feature(vec_push_all)]
+#![feature(cell_extras)]
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate syntax;
@@ -100,12 +106,10 @@ pub use rustc::util;
 use middle::def;
 use middle::infer;
 use middle::subst;
-use middle::ty::{self, Ty};
+use middle::ty::{self, Ty, HasTypeFlags};
 use rustc::ast_map;
 use session::config;
 use util::common::time;
-use util::ppaux::Repr;
-use util::ppaux;
 
 use syntax::codemap::Span;
 use syntax::print::pprust::*;
@@ -144,8 +148,8 @@ pub struct CrateCtxt<'a, 'tcx: 'a> {
 
 // Functions that write types into the node type table
 fn write_ty_to_tcx<'tcx>(tcx: &ty::ctxt<'tcx>, node_id: ast::NodeId, ty: Ty<'tcx>) {
-    debug!("write_ty_to_tcx({}, {})", node_id, ppaux::ty_to_string(tcx, ty));
-    assert!(!ty::type_needs_infer(ty));
+    debug!("write_ty_to_tcx({}, {:?})", node_id,  ty);
+    assert!(!ty.needs_infer());
     tcx.node_type_insert(node_id, ty);
 }
 
@@ -153,13 +157,13 @@ fn write_substs_to_tcx<'tcx>(tcx: &ty::ctxt<'tcx>,
                                  node_id: ast::NodeId,
                                  item_substs: ty::ItemSubsts<'tcx>) {
     if !item_substs.is_noop() {
-        debug!("write_substs_to_tcx({}, {})",
+        debug!("write_substs_to_tcx({}, {:?})",
                node_id,
-               item_substs.repr(tcx));
+               item_substs);
 
-        assert!(item_substs.substs.types.all(|t| !ty::type_needs_infer(*t)));
+        assert!(!item_substs.substs.types.needs_infer());
 
-        tcx.item_substs.borrow_mut().insert(node_id, item_substs);
+        tcx.tables.borrow_mut().item_substs.insert(node_id, item_substs);
     }
 }
 
@@ -184,7 +188,7 @@ fn require_same_types<'a, 'tcx, M>(tcx: &ty::ctxt<'tcx>,
 {
     let result = match maybe_infcx {
         None => {
-            let infcx = infer::new_infer_ctxt(tcx);
+            let infcx = infer::new_infer_ctxt(tcx, &tcx.tables, None, false);
             infer::mk_eqty(&infcx, t1_is_expected, infer::Misc(span), t1, t2)
         }
         Some(infcx) => {
@@ -195,12 +199,8 @@ fn require_same_types<'a, 'tcx, M>(tcx: &ty::ctxt<'tcx>,
     match result {
         Ok(_) => true,
         Err(ref terr) => {
-            span_err!(tcx.sess, span, E0211,
-                              "{}: {}",
-                                      msg(),
-                                      ty::type_err_to_str(tcx,
-                                                          terr));
-            ty::note_and_explain_type_err(tcx, terr, span);
+            span_err!(tcx.sess, span, E0211, "{}: {}", msg(), terr);
+            tcx.note_and_explain_type_err(terr, span);
             false
         }
     }
@@ -210,7 +210,7 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
                     main_id: ast::NodeId,
                     main_span: Span) {
     let tcx = ccx.tcx;
-    let main_t = ty::node_id_to_type(tcx, main_id);
+    let main_t = tcx.node_id_to_type(main_id);
     match main_t.sty {
         ty::TyBareFn(..) => {
             match tcx.map.find(main_id) {
@@ -227,12 +227,12 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
                 }
                 _ => ()
             }
-            let se_ty = ty::mk_bare_fn(tcx, Some(local_def(main_id)), tcx.mk_bare_fn(ty::BareFnTy {
+            let se_ty = tcx.mk_fn(Some(local_def(main_id)), tcx.mk_bare_fn(ty::BareFnTy {
                 unsafety: ast::Unsafety::Normal,
                 abi: abi::Rust,
                 sig: ty::Binder(ty::FnSig {
                     inputs: Vec::new(),
-                    output: ty::FnConverging(ty::mk_nil(tcx)),
+                    output: ty::FnConverging(tcx.mk_nil()),
                     variadic: false
                 })
             }));
@@ -240,15 +240,13 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
             require_same_types(tcx, None, false, main_span, main_t, se_ty,
                 || {
                     format!("main function expects type: `{}`",
-                            ppaux::ty_to_string(ccx.tcx, se_ty))
+                             se_ty)
                 });
         }
         _ => {
             tcx.sess.span_bug(main_span,
-                              &format!("main has a non-function type: found \
-                                       `{}`",
-                                      ppaux::ty_to_string(tcx,
-                                                       main_t)));
+                              &format!("main has a non-function type: found `{}`",
+                                       main_t));
         }
     }
 }
@@ -257,7 +255,7 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
                      start_id: ast::NodeId,
                      start_span: Span) {
     let tcx = ccx.tcx;
-    let start_t = ty::node_id_to_type(tcx, start_id);
+    let start_t = tcx.node_id_to_type(start_id);
     match start_t.sty {
         ty::TyBareFn(..) => {
             match tcx.map.find(start_id) {
@@ -275,13 +273,13 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
                 _ => ()
             }
 
-            let se_ty = ty::mk_bare_fn(tcx, Some(local_def(start_id)), tcx.mk_bare_fn(ty::BareFnTy {
+            let se_ty = tcx.mk_fn(Some(local_def(start_id)), tcx.mk_bare_fn(ty::BareFnTy {
                 unsafety: ast::Unsafety::Normal,
                 abi: abi::Rust,
                 sig: ty::Binder(ty::FnSig {
                     inputs: vec!(
                         tcx.types.isize,
-                        ty::mk_imm_ptr(tcx, ty::mk_imm_ptr(tcx, tcx.types.u8))
+                        tcx.mk_imm_ptr(tcx.mk_imm_ptr(tcx.types.u8))
                     ),
                     output: ty::FnConverging(tcx.types.isize),
                     variadic: false,
@@ -291,15 +289,14 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
             require_same_types(tcx, None, false, start_span, start_t, se_ty,
                 || {
                     format!("start function expects type: `{}`",
-                            ppaux::ty_to_string(ccx.tcx, se_ty))
+                             se_ty)
                 });
 
         }
         _ => {
             tcx.sess.span_bug(start_span,
-                              &format!("start has a non-function type: found \
-                                       `{}`",
-                                      ppaux::ty_to_string(tcx, start_t)));
+                              &format!("start has a non-function type: found `{}`",
+                                       start_t));
         }
     }
 }

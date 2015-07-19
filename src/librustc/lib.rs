@@ -25,26 +25,44 @@
       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
       html_root_url = "http://doc.rust-lang.org/nightly/")]
 
+#![feature(append)]
 #![feature(associated_consts)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
+#![feature(clone_from_slice)]
 #![feature(collections)]
 #![feature(const_fn)]
-#![feature(core)]
 #![feature(duration)]
 #![feature(duration_span)]
+#![feature(dynamic_lib)]
+#![feature(enumset)]
 #![feature(fs_canonicalize)]
-#![feature(hash)]
+#![feature(hash_default)]
+#![feature(hashmap_hasher)]
 #![feature(into_cow)]
+#![feature(iter_cmp)]
+#![feature(iter_arith)]
 #![feature(libc)]
+#![feature(map_in_place)]
+#![feature(num_bits_bytes)]
 #![feature(path_ext)]
 #![feature(quote)]
+#![feature(range_inclusive)]
+#![feature(ref_slice)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
+#![feature(scoped_tls)]
+#![feature(slice_bytes)]
+#![feature(slice_splits)]
 #![feature(slice_patterns)]
+#![feature(slice_position_elem)]
 #![feature(staged_api)]
-#![feature(std_misc)]
 #![feature(str_char)]
+#![feature(str_match_indices)]
+#![feature(vec_push_all)]
+#![feature(wrapping)]
+#![feature(cell_extras)]
+#![feature(page_size)]
 #![cfg_attr(test, feature(test))]
 
 #![allow(trivial_casts)]
@@ -81,16 +99,8 @@ pub mod diagnostics;
 
 pub mod back {
     pub use rustc_back::abi;
-    pub use rustc_back::archive;
-    pub use rustc_back::arm;
-    pub use rustc_back::avr;
-    pub use rustc_back::mips;
-    pub use rustc_back::mipsel;
     pub use rustc_back::rpath;
     pub use rustc_back::svh;
-    pub use rustc_back::target_strs;
-    pub use rustc_back::x86;
-    pub use rustc_back::x86_64;
 }
 
 pub mod ast_map;

@@ -21,7 +21,6 @@ use syntax::ast_util;
 use syntax::visit;
 use syntax::codemap::Span;
 use util::nodemap::DefIdMap;
-use util::ppaux::{Repr, UserString};
 
 pub fn check(tcx: &ty::ctxt) {
     let mut overlap = OverlapChecker { tcx: tcx, default_impls: DefIdMap() };
@@ -51,9 +50,7 @@ impl<'cx, 'tcx> OverlapChecker<'cx, 'tcx> {
         let trait_defs: Vec<_> = self.tcx.trait_defs.borrow().values().cloned().collect();
 
         for trait_def in trait_defs {
-            ty::populate_implementations_for_trait_if_necessary(
-                self.tcx,
-                trait_def.trait_ref.def_id);
+            self.tcx.populate_implementations_for_trait_if_necessary(trait_def.trait_ref.def_id);
             self.check_for_overlapping_impls_of_trait(trait_def);
         }
     }
@@ -61,8 +58,8 @@ impl<'cx, 'tcx> OverlapChecker<'cx, 'tcx> {
     fn check_for_overlapping_impls_of_trait(&self,
                                             trait_def: &'tcx ty::TraitDef<'tcx>)
     {
-        debug!("check_for_overlapping_impls_of_trait(trait_def={})",
-               trait_def.repr(self.tcx));
+        debug!("check_for_overlapping_impls_of_trait(trait_def={:?})",
+               trait_def);
 
         // We should already know all impls of this trait, so these
         // borrows are safe.
@@ -131,12 +128,12 @@ impl<'cx, 'tcx> OverlapChecker<'cx, 'tcx> {
         if let Some((impl1_def_id, impl2_def_id)) = self.order_impls(
             impl1_def_id, impl2_def_id)
         {
-            debug!("check_if_impls_overlap({}, {}, {})",
-                   trait_def_id.repr(self.tcx),
-                   impl1_def_id.repr(self.tcx),
-                   impl2_def_id.repr(self.tcx));
+            debug!("check_if_impls_overlap({:?}, {:?}, {:?})",
+                   trait_def_id,
+                   impl1_def_id,
+                   impl2_def_id);
 
-            let infcx = infer::new_infer_ctxt(self.tcx);
+            let infcx = infer::new_infer_ctxt(self.tcx, &self.tcx.tables, None, false);
             if traits::overlapping_impls(&infcx, impl1_def_id, impl2_def_id) {
                 self.report_overlap_error(trait_def_id, impl1_def_id, impl2_def_id);
             }
@@ -148,7 +145,7 @@ impl<'cx, 'tcx> OverlapChecker<'cx, 'tcx> {
 
         span_err!(self.tcx.sess, self.span_of_impl(impl1), E0119,
                   "conflicting implementations for trait `{}`",
-                  ty::item_path_str(self.tcx, trait_def_id));
+                  self.tcx.item_path_str(trait_def_id));
 
         self.report_overlap_note(impl1, impl2);
     }
@@ -182,7 +179,7 @@ impl<'cx, 'tcx,'v> visit::Visitor<'v> for OverlapChecker<'cx, 'tcx> {
                 // general orphan/coherence rules, it must always be
                 // in this crate.
                 let impl_def_id = ast_util::local_def(item.id);
-                let trait_ref = ty::impl_trait_ref(self.tcx, impl_def_id).unwrap();
+                let trait_ref = self.tcx.impl_trait_ref(impl_def_id).unwrap();
                 let prev_default_impl = self.default_impls.insert(trait_ref.def_id, item.id);
                 match prev_default_impl {
                     Some(prev_id) => {
@@ -195,7 +192,7 @@ impl<'cx, 'tcx,'v> visit::Visitor<'v> for OverlapChecker<'cx, 'tcx> {
             }
             ast::ItemImpl(_, _, _, Some(_), ref self_ty, _) => {
                 let impl_def_id = ast_util::local_def(item.id);
-                let trait_ref = ty::impl_trait_ref(self.tcx, impl_def_id).unwrap();
+                let trait_ref = self.tcx.impl_trait_ref(impl_def_id).unwrap();
                 let trait_def_id = trait_ref.def_id;
                 match trait_ref.self_ty().sty {
                     ty::TyTrait(ref data) => {
@@ -209,7 +206,7 @@ impl<'cx, 'tcx,'v> visit::Visitor<'v> for OverlapChecker<'cx, 'tcx> {
                             // giving a misleading message below.
                             span_err!(self.tcx.sess, self_ty.span, E0372,
                                       "the trait `{}` cannot be made into an object",
-                                      ty::item_path_str(self.tcx, data.principal_def_id()));
+                                      self.tcx.item_path_str(data.principal_def_id()));
                         } else {
                             let mut supertrait_def_ids =
                                 traits::supertrait_def_ids(self.tcx, data.principal_def_id());
@@ -217,8 +214,8 @@ impl<'cx, 'tcx,'v> visit::Visitor<'v> for OverlapChecker<'cx, 'tcx> {
                                 span_err!(self.tcx.sess, item.span, E0371,
                                           "the object type `{}` automatically \
                                            implements the trait `{}`",
-                                          trait_ref.self_ty().user_string(self.tcx),
-                                          ty::item_path_str(self.tcx, trait_def_id));
+                                          trait_ref.self_ty(),
+                                          self.tcx.item_path_str(trait_def_id));
                             }
                         }
                     }

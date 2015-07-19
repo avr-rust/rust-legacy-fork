@@ -29,8 +29,8 @@
 //!
 //! # Examples
 //!
-//! This example creates a `Point` struct that implements `Add` and `Sub`, and then
-//! demonstrates adding and subtracting two `Point`s.
+//! This example creates a `Point` struct that implements `Add` and `Sub`, and
+//! then demonstrates adding and subtracting two `Point`s.
 //!
 //! ```rust
 //! use std::ops::{Add, Sub};
@@ -62,21 +62,21 @@
 //! }
 //! ```
 //!
-//! See the documentation for each trait for a minimum implementation that prints
-//! something to the screen.
+//! See the documentation for each trait for a minimum implementation that
+//! prints something to the screen.
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
 use marker::{Sized, Unsize};
 use fmt;
 
-/// The `Drop` trait is used to run some code when a value goes out of scope. This
-/// is sometimes called a 'destructor'.
+/// The `Drop` trait is used to run some code when a value goes out of scope.
+/// This is sometimes called a 'destructor'.
 ///
 /// # Examples
 ///
-/// A trivial implementation of `Drop`. The `drop` method is called when `_x` goes
-/// out of scope, and therefore `main` prints `Dropping!`.
+/// A trivial implementation of `Drop`. The `drop` method is called when `_x`
+/// goes out of scope, and therefore `main` prints `Dropping!`.
 ///
 /// ```
 /// struct HasDrop;
@@ -103,8 +103,7 @@ pub trait Drop {
 // based on "op T" where T is expected to be `Copy`able
 macro_rules! forward_ref_unop {
     (impl $imp:ident, $method:ident for $t:ty) => {
-        #[unstable(feature = "core",
-                   reason = "recently added, waiting for dust to settle")]
+        #[stable(feature = "rust1", since = "1.0.0")]
         impl<'a> $imp for &'a $t {
             type Output = <$t as $imp>::Output;
 
@@ -120,8 +119,7 @@ macro_rules! forward_ref_unop {
 // based on "T op U" where T and U are expected to be `Copy`able
 macro_rules! forward_ref_binop {
     (impl $imp:ident, $method:ident for $t:ty, $u:ty) => {
-        #[unstable(feature = "core",
-                   reason = "recently added, waiting for dust to settle")]
+        #[stable(feature = "rust1", since = "1.0.0")]
         impl<'a> $imp<$u> for &'a $t {
             type Output = <$t as $imp<$u>>::Output;
 
@@ -131,8 +129,7 @@ macro_rules! forward_ref_binop {
             }
         }
 
-        #[unstable(feature = "core",
-                   reason = "recently added, waiting for dust to settle")]
+        #[stable(feature = "rust1", since = "1.0.0")]
         impl<'a> $imp<&'a $u> for $t {
             type Output = <$t as $imp<$u>>::Output;
 
@@ -142,8 +139,7 @@ macro_rules! forward_ref_binop {
             }
         }
 
-        #[unstable(feature = "core",
-                   reason = "recently added, waiting for dust to settle")]
+        #[stable(feature = "rust1", since = "1.0.0")]
         impl<'a, 'b> $imp<&'a $u> for &'b $t {
             type Output = <$t as $imp<$u>>::Output;
 
@@ -355,7 +351,25 @@ pub trait Div<RHS=Self> {
     fn div(self, rhs: RHS) -> Self::Output;
 }
 
-macro_rules! div_impl {
+macro_rules! div_impl_integer {
+    ($($t:ty)*) => ($(
+        /// This operation rounds towards zero, truncating any
+        /// fractional part of the exact result.
+        #[stable(feature = "rust1", since = "1.0.0")]
+        impl Div for $t {
+            type Output = $t;
+
+            #[inline]
+            fn div(self, other: $t) -> $t { self / other }
+        }
+
+        forward_ref_binop! { impl Div, div for $t, $t }
+    )*)
+}
+
+div_impl_integer! { usize u8 u16 u32 u64 isize i8 i16 i32 i64 }
+
+macro_rules! div_impl_float {
     ($($t:ty)*) => ($(
         #[stable(feature = "rust1", since = "1.0.0")]
         impl Div for $t {
@@ -369,7 +383,7 @@ macro_rules! div_impl {
     )*)
 }
 
-div_impl! { usize u8 u16 u32 u64 isize i8 i16 i32 i64 f32 f64 }
+div_impl_float! { f32 f64 }
 
 /// The `Rem` trait is used to specify the functionality of `%`.
 ///
@@ -411,6 +425,8 @@ pub trait Rem<RHS=Self> {
 
 macro_rules! rem_impl {
     ($($t:ty)*) => ($(
+        /// This operation satisfies `n % d == n - (n / d) * d`.  The
+        /// result has the same sign as the left operand.
         #[stable(feature = "rust1", since = "1.0.0")]
         impl Rem for $t {
             type Output = $t;
@@ -423,26 +439,40 @@ macro_rules! rem_impl {
     )*)
 }
 
-macro_rules! rem_float_impl {
-    ($t:ty, $fmod:ident) => {
-        #[stable(feature = "rust1", since = "1.0.0")]
-        impl Rem for $t {
-            type Output = $t;
+rem_impl! { usize u8 u16 u32 u64 isize i8 i16 i32 i64 }
 
-            #[inline]
-            fn rem(self, other: $t) -> $t {
-                extern { fn $fmod(a: $t, b: $t) -> $t; }
-                unsafe { $fmod(self, other) }
-            }
-        }
+#[stable(feature = "rust1", since = "1.0.0")]
+impl Rem for f32 {
+    type Output = f32;
 
-        forward_ref_binop! { impl Rem, rem for $t, $t }
+    // see notes in `core::f32::Float::floor`
+    #[inline]
+    #[cfg(target_env = "msvc")]
+    fn rem(self, other: f32) -> f32 {
+        (self as f64).rem(other as f64) as f32
+    }
+
+    #[inline]
+    #[cfg(not(target_env = "msvc"))]
+    fn rem(self, other: f32) -> f32 {
+        extern { fn fmodf(a: f32, b: f32) -> f32; }
+        unsafe { fmodf(self, other) }
     }
 }
 
-rem_impl! { usize u8 u16 u32 u64 isize i8 i16 i32 i64 }
-rem_float_impl! { f32, fmodf }
-rem_float_impl! { f64, fmod }
+#[stable(feature = "rust1", since = "1.0.0")]
+impl Rem for f64 {
+    type Output = f64;
+
+    #[inline]
+    fn rem(self, other: f64) -> f64 {
+        extern { fn fmod(a: f64, b: f64) -> f64; }
+        unsafe { fmod(self, other) }
+    }
+}
+
+forward_ref_binop! { impl Rem, rem for f64, f64 }
+forward_ref_binop! { impl Rem, rem for f32, f32 }
 
 /// The `Neg` trait is used to specify the functionality of unary `-`.
 ///
@@ -1210,7 +1240,7 @@ mod impls {
 
 /// Trait that indicates that this is a pointer or a wrapper for one,
 /// where unsizing can be performed on the pointee.
-#[unstable(feature = "core")]
+#[unstable(feature = "coerce_unsized")]
 #[lang="coerce_unsized"]
 pub trait CoerceUnsized<T> {
     // Empty.

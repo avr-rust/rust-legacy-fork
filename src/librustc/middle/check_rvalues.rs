@@ -12,10 +12,10 @@
 // is the public starting point.
 
 use middle::expr_use_visitor as euv;
+use middle::infer;
 use middle::mem_categorization as mc;
 use middle::ty::ParameterEnvironment;
 use middle::ty;
-use util::ppaux::ty_to_string;
 
 use syntax::ast;
 use syntax::codemap::Span;
@@ -39,9 +39,14 @@ impl<'a, 'tcx, 'v> visit::Visitor<'v> for RvalueContext<'a, 'tcx> {
                 s: Span,
                 fn_id: ast::NodeId) {
         {
+            // FIXME (@jroesch) change this to be an inference context
             let param_env = ParameterEnvironment::for_item(self.tcx, fn_id);
+            let infcx = infer::new_infer_ctxt(self.tcx,
+                                              &self.tcx.tables,
+                                              Some(param_env.clone()),
+                                              false);
             let mut delegate = RvalueContextDelegate { tcx: self.tcx, param_env: &param_env };
-            let mut euv = euv::ExprUseVisitor::new(&mut delegate, &param_env);
+            let mut euv = euv::ExprUseVisitor::new(&mut delegate, &infcx);
             euv.walk_fn(fd, b);
         }
         visit::walk_fn(self, fk, fd, b, s)
@@ -59,11 +64,11 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for RvalueContextDelegate<'a, 'tcx> {
                span: Span,
                cmt: mc::cmt<'tcx>,
                _: euv::ConsumeMode) {
-        debug!("consume; cmt: {:?}; type: {}", *cmt, ty_to_string(self.tcx, cmt.ty));
-        if !ty::type_is_sized(Some(self.param_env), self.tcx, span, cmt.ty) {
+        debug!("consume; cmt: {:?}; type: {:?}", *cmt, cmt.ty);
+        if !cmt.ty.is_sized(self.param_env, span) {
             span_err!(self.tcx.sess, span, E0161,
                 "cannot move a value of type {0}: the size of {0} cannot be statically determined",
-                ty_to_string(self.tcx, cmt.ty));
+                cmt.ty);
         }
     }
 

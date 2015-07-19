@@ -12,7 +12,9 @@
 //!
 //! A simple wrapper over the platform's dynamic library facilities
 
-#![unstable(feature = "std_misc")]
+#![unstable(feature = "dynamic_lib",
+            reason = "API has not been scrutinized and is highly likely to \
+                      either disappear or change")]
 #![allow(missing_docs)]
 
 use prelude::v1::*;
@@ -158,6 +160,7 @@ mod tests {
               target_os = "freebsd",
               target_os = "dragonfly",
               target_os = "bitrig",
+              target_os = "netbsd",
               target_os = "openbsd"))]
     fn test_errors_do_not_crash() {
         // Open /dev/null as a library to get an error, and make sure
@@ -177,6 +180,7 @@ mod tests {
           target_os = "freebsd",
           target_os = "dragonfly",
           target_os = "bitrig",
+          target_os = "netbsd",
           target_os = "openbsd"))]
 mod dl {
     use prelude::v1::*;
@@ -261,7 +265,7 @@ mod dl {
     use sys::os;
     use os::windows::prelude::*;
     use ptr;
-    use sys::c::compat::kernel32::SetThreadErrorMode;
+    use sys::c::SetThreadErrorMode;
 
     pub fn open(filename: Option<&OsStr>) -> Result<*mut u8, String> {
         // disable "dll load failed" error dialog.

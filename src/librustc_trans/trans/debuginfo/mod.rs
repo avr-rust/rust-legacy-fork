@@ -30,9 +30,9 @@ use rustc::ast_map;
 use trans::common::{NodeIdAndSpan, CrateContext, FunctionContext, Block};
 use trans;
 use trans::monomorphize;
-use middle::ty::{self, Ty, ClosureTyper};
+use middle::ty::Ty;
 use session::config::{self, FullDebugInfo, LimitedDebugInfo, NoDebugInfo};
-use util::nodemap::{DefIdMap, NodeMap, FnvHashMap, FnvHashSet};
+use util::nodemap::{NodeMap, FnvHashMap, FnvHashSet};
 
 use libc::c_uint;
 use std::cell::{Cell, RefCell};
@@ -41,6 +41,7 @@ use std::ptr;
 use std::rc::Rc;
 use syntax::codemap::{Span, Pos};
 use syntax::{ast, codemap, ast_util};
+use syntax::attr::IntType;
 use syntax::parse::token::{self, special_idents};
 
 pub mod gdb;
@@ -73,7 +74,7 @@ pub struct CrateDebugContext<'tcx> {
     builder: DIBuilderRef,
     current_debug_location: Cell<InternalDebugLocation>,
     created_files: RefCell<FnvHashMap<String, DIFile>>,
-    created_enum_disr_types: RefCell<DefIdMap<DIType>>,
+    created_enum_disr_types: RefCell<FnvHashMap<(ast::DefId, IntType), DIType>>,
 
     type_map: RefCell<TypeMap<'tcx>>,
     namespace_map: RefCell<FnvHashMap<Vec<ast::Name>, Rc<NamespaceTreeNode>>>,
@@ -94,7 +95,7 @@ impl<'tcx> CrateDebugContext<'tcx> {
             builder: builder,
             current_debug_location: Cell::new(InternalDebugLocation::UnknownLocation),
             created_files: RefCell::new(FnvHashMap()),
-            created_enum_disr_types: RefCell::new(DefIdMap()),
+            created_enum_disr_types: RefCell::new(FnvHashMap()),
             type_map: RefCell::new(TypeMap::new()),
             namespace_map: RefCell::new(FnvHashMap()),
             composite_types_completed: RefCell::new(FnvHashSet()),
@@ -412,11 +413,11 @@ pub fn create_function_debug_context<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
 
         // Return type -- llvm::DIBuilder wants this at index 0
         assert_type_for_node_id(cx, fn_ast_id, error_reporting_span);
-        let return_type = ty::node_id_to_type(cx.tcx(), fn_ast_id);
+        let return_type = cx.tcx().node_id_to_type(fn_ast_id);
         let return_type = monomorphize::apply_param_substs(cx.tcx(),
                                                            param_substs,
                                                            &return_type);
-        if ty::type_is_nil(return_type) {
+        if return_type.is_nil() {
             signature.push(ptr::null_mut())
         } else {
             signature.push(type_metadata(cx, return_type, codemap::DUMMY_SP));
@@ -425,7 +426,7 @@ pub fn create_function_debug_context<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
         // Arguments types
         for arg in &fn_decl.inputs {
             assert_type_for_node_id(cx, arg.pat.id, arg.pat.span);
-            let arg_type = ty::node_id_to_type(cx.tcx(), arg.pat.id);
+            let arg_type = cx.tcx().node_id_to_type(arg.pat.id);
             let arg_type = monomorphize::apply_param_substs(cx.tcx(),
                                                             param_substs,
                                                             &arg_type);

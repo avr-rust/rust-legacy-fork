@@ -10,7 +10,6 @@
 
 use middle::ty::{self, Ty};
 use middle::ty_relate::{self, Relate, TypeRelation, RelateResult};
-use util::ppaux::Repr;
 
 /// A type "A" *matches* "B" if the fresh types in B could be
 /// substituted with values so as to make it equal to A. Matching is
@@ -53,16 +52,16 @@ impl<'a, 'tcx> TypeRelation<'a, 'tcx> for Match<'a, 'tcx> {
     }
 
     fn regions(&mut self, a: ty::Region, b: ty::Region) -> RelateResult<'tcx, ty::Region> {
-        debug!("{}.regions({}, {})",
+        debug!("{}.regions({:?}, {:?})",
                self.tag(),
-               a.repr(self.tcx()),
-               b.repr(self.tcx()));
+               a,
+               b);
         Ok(a)
     }
 
     fn tys(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> RelateResult<'tcx, Ty<'tcx>> {
-        debug!("{}.tys({}, {})", self.tag(),
-               a.repr(self.tcx()), b.repr(self.tcx()));
+        debug!("{}.tys({:?}, {:?})", self.tag(),
+               a, b);
         if a == b { return Ok(a); }
 
         match (&a.sty, &b.sty) {
@@ -74,7 +73,7 @@ impl<'a, 'tcx> TypeRelation<'a, 'tcx> for Match<'a, 'tcx> {
 
             (&ty::TyInfer(_), _) |
             (_, &ty::TyInfer(_)) => {
-                Err(ty::terr_sorts(ty_relate::expected_found(self, &a, &b)))
+                Err(ty::TypeError::Sorts(ty_relate::expected_found(self, &a, &b)))
             }
 
             (&ty::TyError, _) | (_, &ty::TyError) => {

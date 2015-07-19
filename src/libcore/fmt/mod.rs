@@ -33,7 +33,7 @@ pub use self::builders::{DebugStruct, DebugTuple, DebugSet, DebugList, DebugMap}
 mod num;
 mod builders;
 
-#[unstable(feature = "core", reason = "internal to format_args!")]
+#[unstable(feature = "fmt_internals", reason = "internal to format_args!")]
 #[doc(hidden)]
 pub mod rt {
     pub mod v1;
@@ -146,7 +146,7 @@ enum Void {}
 /// compile time it is ensured that the function and the value have the correct
 /// types, and then this struct is used to canonicalize arguments to one type.
 #[derive(Copy)]
-#[unstable(feature = "core", reason = "internal to format_args!")]
+#[unstable(feature = "fmt_internals", reason = "internal to format_args!")]
 #[doc(hidden)]
 pub struct ArgumentV1<'a> {
     value: &'a Void,
@@ -166,7 +166,7 @@ impl<'a> ArgumentV1<'a> {
     }
 
     #[doc(hidden)]
-    #[unstable(feature = "core", reason = "internal to format_args!")]
+    #[unstable(feature = "fmt_internals", reason = "internal to format_args!")]
     pub fn new<'b, T>(x: &'b T,
                       f: fn(&T, &mut Formatter) -> Result) -> ArgumentV1<'b> {
         unsafe {
@@ -178,7 +178,7 @@ impl<'a> ArgumentV1<'a> {
     }
 
     #[doc(hidden)]
-    #[unstable(feature = "core", reason = "internal to format_args!")]
+    #[unstable(feature = "fmt_internals", reason = "internal to format_args!")]
     pub fn from_usize(x: &usize) -> ArgumentV1 {
         ArgumentV1::new(x, ArgumentV1::show_usize)
     }
@@ -201,7 +201,7 @@ impl<'a> Arguments<'a> {
     /// When using the format_args!() macro, this function is used to generate the
     /// Arguments structure.
     #[doc(hidden)] #[inline]
-    #[unstable(feature = "core", reason = "internal to format_args!")]
+    #[unstable(feature = "fmt_internals", reason = "internal to format_args!")]
     pub fn new_v1(pieces: &'a [&'a str],
                   args: &'a [ArgumentV1<'a>]) -> Arguments<'a> {
         Arguments {
@@ -218,7 +218,7 @@ impl<'a> Arguments<'a> {
     /// created with `argumentusize`. However, failing to do so doesn't cause
     /// unsafety, but will ignore invalid .
     #[doc(hidden)] #[inline]
-    #[unstable(feature = "core", reason = "internal to format_args!")]
+    #[unstable(feature = "fmt_internals", reason = "internal to format_args!")]
     pub fn new_v1_formatted(pieces: &'a [&'a str],
                             args: &'a [ArgumentV1<'a>],
                             fmt: &'a [rt::v1::Argument]) -> Arguments<'a> {
@@ -267,10 +267,17 @@ impl<'a> Display for Arguments<'a> {
     }
 }
 
-/// Format trait for the `:?` format. Useful for debugging, all types
-/// should implement this.
+/// Format trait for the `?` character.
+///
+/// `Debug` should format the output in a programmer-facing, debugging context.
 ///
 /// Generally speaking, you should just `derive` a `Debug` implementation.
+///
+/// When used with the alternate format specifier `#?`, the output is pretty-printed.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
 ///
 /// # Examples
 ///
@@ -309,10 +316,42 @@ impl<'a> Display for Arguments<'a> {
 /// println!("The origin is: {:?}", origin);
 /// ```
 ///
+/// This outputs:
+///
+/// ```text
+/// The origin is: Point { x: 0, y: 0 }
+/// ```
+///
 /// There are a number of `debug_*` methods on `Formatter` to help you with manual
 /// implementations, such as [`debug_struct`][debug_struct].
 ///
+/// `Debug` implementations using either `derive` or the debug builder API
+/// on `Formatter` support pretty printing using the alternate flag: `{:#?}`.
+///
 /// [debug_struct]: ../std/fmt/struct.Formatter.html#method.debug_struct
+///
+/// Pretty printing with `#?`:
+///
+/// ```
+/// #[derive(Debug)]
+/// struct Point {
+///     x: i32,
+///     y: i32,
+/// }
+///
+/// let origin = Point { x: 0, y: 0 };
+///
+/// println!("The origin is: {:#?}", origin);
+/// ```
+///
+/// This outputs:
+///
+/// ```text
+/// The origin is: Point {
+///     x: 0,
+///     y: 0
+/// }
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_on_unimplemented = "`{Self}` cannot be formatted using `:?`; if it is \
                             defined in your crate, add `#[derive(Debug)]` or \
@@ -324,8 +363,39 @@ pub trait Debug {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// When a value can be semantically expressed as a String, this trait may be
-/// used. It corresponds to the default format, `{}`.
+/// Format trait for an empty format, `{}`.
+///
+/// `Display` is similar to [`Debug`][debug], but `Display` is for user-facing
+/// output, and so cannot be derived.
+///
+/// [debug]: trait.Debug.html
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Implementing `Display` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Point {
+///     x: i32,
+///     y: i32,
+/// }
+///
+/// impl fmt::Display for Point {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         write!(f, "({}, {})", self.x, self.y)
+///     }
+/// }
+///
+/// let origin = Point { x: 0, y: 0 };
+///
+/// println!("The origin is: {}", origin);
+/// ```
 #[rustc_on_unimplemented = "`{Self}` cannot be formatted with the default \
                             formatter; try using `:?` instead if you are using \
                             a format string"]
@@ -336,7 +406,46 @@ pub trait Display {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// Format trait for the `o` character
+/// Format trait for the `o` character.
+///
+/// The `Octal` trait should format its output as a number in base-8.
+///
+/// The alternate flag, `#`, adds a `0o` in front of the output.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Basic usage with `i32`:
+///
+/// ```
+/// let x = 42; // 42 is '52' in octal
+///
+/// assert_eq!(format!("{:o}", x), "52");
+/// assert_eq!(format!("{:#o}", x), "0o52");
+/// ```
+///
+/// Implementing `Octal` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Length(i32);
+///
+/// impl fmt::Octal for Length {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         let val = self.0;
+///
+///         write!(f, "{:o}", val) // delegate to i32's implementation
+///     }
+/// }
+///
+/// let l = Length(9);
+///
+/// println!("l as octal is: {:o}", l);
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait Octal {
     /// Formats the value using the given formatter.
@@ -344,7 +453,46 @@ pub trait Octal {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// Format trait for the `b` character
+/// Format trait for the `b` character.
+///
+/// The `Binary` trait should format its output as a number in binary.
+///
+/// The alternate flag, `#`, adds a `0b` in front of the output.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Basic usage with `i32`:
+///
+/// ```
+/// let x = 42; // 42 is '101010' in binary
+///
+/// assert_eq!(format!("{:b}", x), "101010");
+/// assert_eq!(format!("{:#b}", x), "0b101010");
+/// ```
+///
+/// Implementing `Binary` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Length(i32);
+///
+/// impl fmt::Binary for Length {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         let val = self.0;
+///
+///         write!(f, "{:b}", val) // delegate to i32's implementation
+///     }
+/// }
+///
+/// let l = Length(107);
+///
+/// println!("l as binary is: {:b}", l);
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait Binary {
     /// Formats the value using the given formatter.
@@ -352,7 +500,47 @@ pub trait Binary {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// Format trait for the `x` character
+/// Format trait for the `x` character.
+///
+/// The `LowerHex` trait should format its output as a number in hexidecimal, with `a` through `f`
+/// in lower case.
+///
+/// The alternate flag, `#`, adds a `0x` in front of the output.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Basic usage with `i32`:
+///
+/// ```
+/// let x = 42; // 42 is '2a' in hex
+///
+/// assert_eq!(format!("{:x}", x), "2a");
+/// assert_eq!(format!("{:#x}", x), "0x2a");
+/// ```
+///
+/// Implementing `LowerHex` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Length(i32);
+///
+/// impl fmt::LowerHex for Length {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         let val = self.0;
+///
+///         write!(f, "{:x}", val) // delegate to i32's implementation
+///     }
+/// }
+///
+/// let l = Length(9);
+///
+/// println!("l as hex is: {:x}", l);
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait LowerHex {
     /// Formats the value using the given formatter.
@@ -360,7 +548,47 @@ pub trait LowerHex {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// Format trait for the `X` character
+/// Format trait for the `X` character.
+///
+/// The `UpperHex` trait should format its output as a number in hexidecimal, with `A` through `F`
+/// in upper case.
+///
+/// The alternate flag, `#`, adds a `0x` in front of the output.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Basic usage with `i32`:
+///
+/// ```
+/// let x = 42; // 42 is '2A' in hex
+///
+/// assert_eq!(format!("{:X}", x), "2A");
+/// assert_eq!(format!("{:#X}", x), "0x2A");
+/// ```
+///
+/// Implementing `UpperHex` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Length(i32);
+///
+/// impl fmt::UpperHex for Length {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         let val = self.0;
+///
+///         write!(f, "{:X}", val) // delegate to i32's implementation
+///     }
+/// }
+///
+/// let l = Length(9);
+///
+/// println!("l as hex is: {:X}", l);
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait UpperHex {
     /// Formats the value using the given formatter.
@@ -368,7 +596,44 @@ pub trait UpperHex {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// Format trait for the `p` character
+/// Format trait for the `p` character.
+///
+/// The `Pointer` trait should format its output as a memory location. This is commonly presented
+/// as hexidecimal.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Basic usage with `&i32`:
+///
+/// ```
+/// let x = &42;
+///
+/// let address = format!("{:p}", x); // this produces something like '0x7f06092ac6d0'
+/// ```
+///
+/// Implementing `Pointer` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Length(i32);
+///
+/// impl fmt::Pointer for Length {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         // use `as` to convert to a `*const T`, which implements Pointer, which we can use
+///
+///         write!(f, "{:p}", self as *const Length)
+///     }
+/// }
+///
+/// let l = Length(42);
+///
+/// println!("l is in memory here: {:p}", l);
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait Pointer {
     /// Formats the value using the given formatter.
@@ -376,7 +641,42 @@ pub trait Pointer {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// Format trait for the `e` character
+/// Format trait for the `e` character.
+///
+/// The `LowerExp` trait should format its output in scientific notation with a lower-case `e`.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Basic usage with `i32`:
+///
+/// ```
+/// let x = 42.0; // 42.0 is '4.2e1' in scientific notation
+///
+/// assert_eq!(format!("{:e}", x), "4.2e1");
+/// ```
+///
+/// Implementing `LowerExp` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Length(i32);
+///
+/// impl fmt::LowerExp for Length {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         let val = self.0;
+///         write!(f, "{}e1", val / 10)
+///     }
+/// }
+///
+/// let l = Length(100);
+///
+/// println!("l in scientific notation is: {:e}", l);
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait LowerExp {
     /// Formats the value using the given formatter.
@@ -384,7 +684,42 @@ pub trait LowerExp {
     fn fmt(&self, &mut Formatter) -> Result;
 }
 
-/// Format trait for the `E` character
+/// Format trait for the `E` character.
+///
+/// The `UpperExp` trait should format its output in scientific notation with an upper-case `E`.
+///
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../index.html
+///
+/// # Examples
+///
+/// Basic usage with `f32`:
+///
+/// ```
+/// let x = 42.0; // 42.0 is '4.2E1' in scientific notation
+///
+/// assert_eq!(format!("{:E}", x), "4.2E1");
+/// ```
+///
+/// Implementing `UpperExp` on a type:
+///
+/// ```
+/// use std::fmt;
+///
+/// struct Length(i32);
+///
+/// impl fmt::UpperExp for Length {
+///     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+///         let val = self.0;
+///         write!(f, "{}E1", val / 10)
+///     }
+/// }
+///
+/// let l = Length(100);
+///
+/// println!("l in scientific notation is: {:E}", l);
+/// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait UpperExp {
     /// Formats the value using the given formatter.
@@ -742,19 +1077,19 @@ impl<'a> Formatter<'a> {
     pub fn flags(&self) -> u32 { self.flags }
 
     /// Character used as 'fill' whenever there is alignment
-    #[unstable(feature = "core", reason = "method was just created")]
+    #[unstable(feature = "fmt_flags", reason = "method was just created")]
     pub fn fill(&self) -> char { self.fill }
 
     /// Flag indicating what form of alignment was requested
-    #[unstable(feature = "core", reason = "method was just created")]
+    #[unstable(feature = "fmt_flags", reason = "method was just created")]
     pub fn align(&self) -> Alignment { self.align }
 
     /// Optionally specified integer width that the output should be
-    #[unstable(feature = "core", reason = "method was just created")]
+    #[unstable(feature = "fmt_flags", reason = "method was just created")]
     pub fn width(&self) -> Option<usize> { self.width }
 
     /// Optionally specified precision for numeric types
-    #[unstable(feature = "core", reason = "method was just created")]
+    #[unstable(feature = "fmt_flags", reason = "method was just created")]
     pub fn precision(&self) -> Option<usize> { self.precision }
 
     /// Creates a `DebugStruct` builder designed to assist with creation of
@@ -980,7 +1315,14 @@ impl Debug for char {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Display for char {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        f.write_char(*self)
+        if f.width.is_none() && f.precision.is_none() {
+            f.write_char(*self)
+        } else {
+            let mut utf8 = [0; 4];
+            let amt = self.encode_utf8(&mut utf8).unwrap_or(0);
+            let s: &str = unsafe { mem::transmute(&utf8[..amt]) };
+            f.pad(s)
+        }
     }
 }
 
@@ -1146,20 +1488,19 @@ macro_rules! tuple {
         impl<$($name:Debug),*> Debug for ($($name,)*) {
             #[allow(non_snake_case, unused_assignments)]
             fn fmt(&self, f: &mut Formatter) -> Result {
-                try!(write!(f, "("));
+                let mut builder = f.debug_tuple("");
                 let ($(ref $name,)*) = *self;
                 let mut n = 0;
                 $(
-                    if n > 0 {
-                        try!(write!(f, ", "));
-                    }
-                    try!(write!(f, "{:?}", *$name));
+                    builder.field($name);
                     n += 1;
                 )*
+
                 if n == 1 {
-                    try!(write!(f, ","));
+                    try!(write!(builder.formatter(), ","));
                 }
-                write!(f, ")")
+
+                builder.finish()
             }
         }
         peel! { $($name,)* }

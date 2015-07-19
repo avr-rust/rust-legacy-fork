@@ -20,16 +20,15 @@
 //! * Use define_* family of methods when you might be defining the ValueRef.
 //! * When in doubt, define.
 use llvm::{self, ValueRef};
-use middle::ty::{self, ClosureTyper};
+use middle::ty;
+use middle::infer;
 use syntax::abi;
 use trans::attributes;
 use trans::base;
-use trans::common;
 use trans::context::CrateContext;
 use trans::monomorphize;
 use trans::type_::Type;
 use trans::type_of;
-use util::ppaux::Repr;
 
 use std::ffi::CString;
 use libc::c_uint;
@@ -106,11 +105,11 @@ pub fn declare_cfn(ccx: &CrateContext, name: &str, fn_type: Type,
 /// update the declaration and return existing ValueRef instead.
 pub fn declare_rust_fn<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, name: &str,
                                  fn_type: ty::Ty<'tcx>) -> ValueRef {
-    debug!("declare_rust_fn(name={:?}, fn_type={})", name,
-           fn_type.repr(ccx.tcx()));
+    debug!("declare_rust_fn(name={:?}, fn_type={:?})", name,
+           fn_type);
     let fn_type = monomorphize::normalize_associated_type(ccx.tcx(), &fn_type);
-    debug!("declare_rust_fn (after normalised associated types) fn_type={}",
-           fn_type.repr(ccx.tcx()));
+    debug!("declare_rust_fn (after normalised associated types) fn_type={:?}",
+           fn_type);
 
     let function_type; // placeholder so that the memory ownership works out ok
     let (sig, abi, env) = match fn_type.sty {
@@ -118,19 +117,19 @@ pub fn declare_rust_fn<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, name: &str,
             (&f.sig, f.abi, None)
         }
         ty::TyClosure(closure_did, substs) => {
-            let typer = common::NormalizingClosureTyper::new(ccx.tcx());
-            function_type = typer.closure_type(closure_did, substs);
+            let infcx = infer::normalizing_infer_ctxt(ccx.tcx(), &ccx.tcx().tables);
+            function_type = infcx.closure_type(closure_did, substs);
             let self_type = base::self_type_for_closure(ccx, closure_did, fn_type);
             let llenvironment_type = type_of::type_of_explicit_arg(ccx, self_type);
-            debug!("declare_rust_fn function_type={} self_type={}",
-                   function_type.repr(ccx.tcx()), self_type.repr(ccx.tcx()));
+            debug!("declare_rust_fn function_type={:?} self_type={:?}",
+                   function_type, self_type);
             (&function_type.sig, abi::RustCall, Some(llenvironment_type))
         }
         _ => ccx.sess().bug("expected closure or fn")
     };
 
-    let sig = ty::Binder(ty::erase_late_bound_regions(ccx.tcx(), sig));
-    debug!("declare_rust_fn (after region erasure) sig={}", sig.repr(ccx.tcx()));
+    let sig = ty::Binder(ccx.tcx().erase_late_bound_regions(sig));
+    debug!("declare_rust_fn (after region erasure) sig={:?}", sig);
     let llfty = type_of::type_of_rust_fn(ccx, env, &sig, abi);
     debug!("declare_rust_fn llfty={}", ccx.tn().type_to_string(llfty));
 

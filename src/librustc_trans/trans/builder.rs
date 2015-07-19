@@ -167,7 +167,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                args.iter()
                    .map(|&v| self.ccx.tn().val_to_string(v))
                    .collect::<Vec<String>>()
-                   .connect(", "));
+                   .join(", "));
 
         unsafe {
             let v = llvm::LLVMBuildInvoke(self.llbuilder,
@@ -410,21 +410,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
     }
 
-    /* Memory */
-    pub fn malloc(&self, ty: Type) -> ValueRef {
-        self.count_insn("malloc");
-        unsafe {
-            llvm::LLVMBuildMalloc(self.llbuilder, ty.to_ref(), noname())
-        }
-    }
-
-    pub fn array_malloc(&self, ty: Type, val: ValueRef) -> ValueRef {
-        self.count_insn("arraymalloc");
-        unsafe {
-            llvm::LLVMBuildArrayMalloc(self.llbuilder, ty.to_ref(), val, noname())
-        }
-    }
-
     pub fn alloca(&self, ty: Type, name: &str) -> ValueRef {
         self.count_insn("alloca");
         unsafe {
@@ -435,13 +420,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 llvm::LLVMBuildAlloca(self.llbuilder, ty.to_ref(),
                                       name.as_ptr())
             }
-        }
-    }
-
-    pub fn array_alloca(&self, ty: Type, val: ValueRef) -> ValueRef {
-        self.count_insn("arrayalloca");
-        unsafe {
-            llvm::LLVMBuildArrayAlloca(self.llbuilder, ty.to_ref(), val, noname())
         }
     }
 
@@ -831,7 +809,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                args.iter()
                    .map(|&v| self.ccx.tn().val_to_string(v))
                    .collect::<Vec<String>>()
-                   .connect(", "));
+                   .join(", "));
 
         unsafe {
             let v = llvm::LLVMBuildCall(self.llbuilder, llfn, args.as_ptr(),
@@ -949,11 +927,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
     }
 
-    pub fn landing_pad(&self, ty: Type, pers_fn: ValueRef, num_clauses: usize) -> ValueRef {
+    pub fn landing_pad(&self, ty: Type, pers_fn: ValueRef,
+                       num_clauses: usize,
+                       llfn: ValueRef) -> ValueRef {
         self.count_insn("landingpad");
         unsafe {
-            llvm::LLVMBuildLandingPad(
-                self.llbuilder, ty.to_ref(), pers_fn, num_clauses as c_uint, noname())
+            llvm::LLVMRustBuildLandingPad(self.llbuilder, ty.to_ref(), pers_fn,
+                                          num_clauses as c_uint, noname(), llfn)
         }
     }
 

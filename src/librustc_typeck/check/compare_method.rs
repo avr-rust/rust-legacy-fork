@@ -13,7 +13,6 @@ use middle::infer;
 use middle::traits;
 use middle::ty::{self};
 use middle::subst::{self, Subst, Substs, VecPerParamSpace};
-use util::ppaux::{self, Repr};
 
 use syntax::ast;
 use syntax::codemap::Span;
@@ -38,14 +37,14 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
                                  impl_m_body_id: ast::NodeId,
                                  trait_m: &ty::Method<'tcx>,
                                  impl_trait_ref: &ty::TraitRef<'tcx>) {
-    debug!("compare_impl_method(impl_trait_ref={})",
-           impl_trait_ref.repr(tcx));
+    debug!("compare_impl_method(impl_trait_ref={:?})",
+           impl_trait_ref);
 
-    debug!("compare_impl_method: impl_trait_ref (liberated) = {}",
-           impl_trait_ref.repr(tcx));
+    debug!("compare_impl_method: impl_trait_ref (liberated) = {:?}",
+           impl_trait_ref);
 
-    let infcx = infer::new_infer_ctxt(tcx);
-    let mut fulfillment_cx = traits::FulfillmentContext::new(true);
+    let mut infcx = infer::new_infer_ctxt(tcx, &tcx.tables, None, true);
+    let mut fulfillment_cx = infcx.fulfillment_cx.borrow_mut();
 
     let trait_to_impl_substs = &impl_trait_ref.substs;
 
@@ -63,18 +62,16 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
             span_err!(tcx.sess, impl_m_span, E0185,
                 "method `{}` has a `{}` declaration in the impl, \
                         but not in the trait",
-                        token::get_name(trait_m.name),
-                        ppaux::explicit_self_category_to_str(
-                            &impl_m.explicit_self));
+                        trait_m.name,
+                        impl_m.explicit_self);
             return;
         }
         (_, &ty::StaticExplicitSelfCategory) => {
             span_err!(tcx.sess, impl_m_span, E0186,
                 "method `{}` has a `{}` declaration in the trait, \
                         but not in the impl",
-                        token::get_name(trait_m.name),
-                        ppaux::explicit_self_category_to_str(
-                            &trait_m.explicit_self));
+                        trait_m.name,
+                        trait_m.explicit_self);
             return;
         }
         _ => {
@@ -103,7 +100,7 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
             token::get_name(trait_m.name),
             impl_m.fty.sig.0.inputs.len(),
             if impl_m.fty.sig.0.inputs.len() == 1 {""} else {"s"},
-            ty::item_path_str(tcx, trait_m.def_id),
+            tcx.item_path_str(trait_m.def_id),
             trait_m.fty.sig.0.inputs.len());
         return;
     }
@@ -185,8 +182,8 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
         .subst(tcx, impl_to_skol_substs)
         .with_method(impl_to_skol_substs.types.get_slice(subst::FnSpace).to_vec(),
                      impl_to_skol_substs.regions().get_slice(subst::FnSpace).to_vec());
-    debug!("compare_impl_method: trait_to_skol_substs={}",
-           trait_to_skol_substs.repr(tcx));
+    debug!("compare_impl_method: trait_to_skol_substs={:?}",
+           trait_to_skol_substs);
 
     // Check region bounds. FIXME(@jroesch) refactor this away when removing
     // ParamBounds.
@@ -213,8 +210,8 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
             impl_m_span,
             infer::HigherRankedType,
             &ty::Binder(impl_bounds));
-    debug!("compare_impl_method: impl_bounds={}",
-           impl_bounds.repr(tcx));
+    debug!("compare_impl_method: impl_bounds={:?}",
+           impl_bounds);
 
     // Normalize the associated types in the trait_bounds.
     let trait_bounds = trait_m.predicates.instantiate(tcx, &trait_to_skol_substs);
@@ -243,11 +240,13 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
     let trait_param_env = impl_param_env.with_caller_bounds(hybrid_preds.into_vec());
     let trait_param_env = traits::normalize_param_env_or_error(trait_param_env,
                                                                normalize_cause.clone());
+    // FIXME(@jroesch) this seems ugly, but is a temporary change
+    infcx.parameter_environment = trait_param_env;
 
-    debug!("compare_impl_method: trait_bounds={}",
-        trait_param_env.caller_bounds.repr(tcx));
+    debug!("compare_impl_method: trait_bounds={:?}",
+        infcx.parameter_environment.caller_bounds);
 
-    let mut selcx = traits::SelectionContext::new(&infcx, &trait_param_env);
+    let mut selcx = traits::SelectionContext::new(&infcx);
 
     for predicate in impl_pred.fns {
         let traits::Normalized { value: predicate, .. } =
@@ -278,9 +277,9 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
     // type.
 
     // Compute skolemized form of impl and trait method tys.
-    let impl_fty = ty::mk_bare_fn(tcx, None, tcx.mk_bare_fn(impl_m.fty.clone()));
+    let impl_fty = tcx.mk_fn(None, tcx.mk_bare_fn(impl_m.fty.clone()));
     let impl_fty = impl_fty.subst(tcx, impl_to_skol_substs);
-    let trait_fty = ty::mk_bare_fn(tcx, None, tcx.mk_bare_fn(trait_m.fty.clone()));
+    let trait_fty = tcx.mk_fn(None, tcx.mk_bare_fn(trait_m.fty.clone()));
     let trait_fty = trait_fty.subst(tcx, &trait_to_skol_substs);
 
     let err = infcx.commit_if_ok(|snapshot| {
@@ -294,19 +293,17 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
             impl_sig.subst(tcx, impl_to_skol_substs);
         let impl_sig =
             assoc::normalize_associated_types_in(&infcx,
-                                                 &impl_param_env,
                                                  &mut fulfillment_cx,
                                                  impl_m_span,
                                                  impl_m_body_id,
                                                  &impl_sig);
-        let impl_fty =
-            ty::mk_bare_fn(tcx,
-                           None,
-                           tcx.mk_bare_fn(ty::BareFnTy { unsafety: impl_m.fty.unsafety,
-                                                         abi: impl_m.fty.abi,
-                                                         sig: ty::Binder(impl_sig) }));
-        debug!("compare_impl_method: impl_fty={}",
-               impl_fty.repr(tcx));
+        let impl_fty = tcx.mk_fn(None, tcx.mk_bare_fn(ty::BareFnTy {
+            unsafety: impl_m.fty.unsafety,
+            abi: impl_m.fty.abi,
+            sig: ty::Binder(impl_sig)
+        }));
+        debug!("compare_impl_method: impl_fty={:?}",
+               impl_fty);
 
         let (trait_sig, skol_map) =
             infcx.skolemize_late_bound_regions(&trait_m.fty.sig, snapshot);
@@ -314,20 +311,18 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
             trait_sig.subst(tcx, &trait_to_skol_substs);
         let trait_sig =
             assoc::normalize_associated_types_in(&infcx,
-                                                 &impl_param_env,
                                                  &mut fulfillment_cx,
                                                  impl_m_span,
                                                  impl_m_body_id,
                                                  &trait_sig);
-        let trait_fty =
-            ty::mk_bare_fn(tcx,
-                           None,
-                           tcx.mk_bare_fn(ty::BareFnTy { unsafety: trait_m.fty.unsafety,
-                                                         abi: trait_m.fty.abi,
-                                                         sig: ty::Binder(trait_sig) }));
+        let trait_fty = tcx.mk_fn(None, tcx.mk_bare_fn(ty::BareFnTy {
+            unsafety: trait_m.fty.unsafety,
+            abi: trait_m.fty.abi,
+            sig: ty::Binder(trait_sig)
+        }));
 
-        debug!("compare_impl_method: trait_fty={}",
-               trait_fty.repr(tcx));
+        debug!("compare_impl_method: trait_fty={:?}",
+               trait_fty);
 
         try!(infer::mk_subty(&infcx, false, origin, impl_fty, trait_fty));
 
@@ -337,20 +332,20 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
     match err {
         Ok(()) => { }
         Err(terr) => {
-            debug!("checking trait method for compatibility: impl ty {}, trait ty {}",
-                   impl_fty.repr(tcx),
-                   trait_fty.repr(tcx));
+            debug!("checking trait method for compatibility: impl ty {:?}, trait ty {:?}",
+                   impl_fty,
+                   trait_fty);
             span_err!(tcx.sess, impl_m_span, E0053,
                       "method `{}` has an incompatible type for trait: {}",
                       token::get_name(trait_m.name),
-                      ty::type_err_to_str(tcx, &terr));
+                      terr);
             return;
         }
     }
 
     // Check that all obligations are satisfied by the implementation's
     // version.
-    match fulfillment_cx.select_all_or_error(&infcx, &trait_param_env) {
+    match fulfillment_cx.select_all_or_error(&infcx) {
         Err(ref errors) => { traits::report_fulfillment_errors(&infcx, errors) }
         Ok(_) => {}
     }
@@ -365,7 +360,8 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
     // anyway, so it shouldn't be needed there either. Anyway, we can
     // always add more relations later (it's backwards compat).
     let mut free_regions = FreeRegionMap::new();
-    free_regions.relate_free_regions_from_predicates(tcx, &trait_param_env.caller_bounds);
+    free_regions.relate_free_regions_from_predicates(tcx,
+                                                     &infcx.parameter_environment.caller_bounds);
 
     infcx.resolve_regions_and_report_errors(&free_regions, impl_m_body_id);
 
@@ -383,14 +379,14 @@ pub fn compare_impl_method<'tcx>(tcx: &ty::ctxt<'tcx>,
         let impl_params = impl_generics.regions.get_slice(subst::FnSpace);
 
         debug!("check_region_bounds_on_impl_method: \
-               trait_generics={} \
-               impl_generics={} \
-               trait_to_skol_substs={} \
-               impl_to_skol_substs={}",
-               trait_generics.repr(tcx),
-               impl_generics.repr(tcx),
-               trait_to_skol_substs.repr(tcx),
-               impl_to_skol_substs.repr(tcx));
+               trait_generics={:?} \
+               impl_generics={:?} \
+               trait_to_skol_substs={:?} \
+               impl_to_skol_substs={:?}",
+               trait_generics,
+               impl_generics,
+               trait_to_skol_substs,
+               impl_to_skol_substs);
 
         // Must have same number of early-bound lifetime parameters.
         // Unfortunately, if the user screws up the bounds, then this
@@ -418,11 +414,11 @@ pub fn compare_const_impl<'tcx>(tcx: &ty::ctxt<'tcx>,
                                 impl_c_span: Span,
                                 trait_c: &ty::AssociatedConst<'tcx>,
                                 impl_trait_ref: &ty::TraitRef<'tcx>) {
-    debug!("compare_const_impl(impl_trait_ref={})",
-           impl_trait_ref.repr(tcx));
+    debug!("compare_const_impl(impl_trait_ref={:?})",
+           impl_trait_ref);
 
-    let infcx = infer::new_infer_ctxt(tcx);
-    let mut fulfillment_cx = traits::FulfillmentContext::new(true);
+    let infcx = infer::new_infer_ctxt(tcx, &tcx.tables, None, true);
+    let mut fulfillment_cx = infcx.fulfillment_cx.borrow_mut();
 
     // The below is for the most part highly similar to the procedure
     // for methods above. It is simpler in many respects, especially
@@ -445,8 +441,8 @@ pub fn compare_const_impl<'tcx>(tcx: &ty::ctxt<'tcx>,
         .subst(tcx, impl_to_skol_substs)
         .with_method(impl_to_skol_substs.types.get_slice(subst::FnSpace).to_vec(),
                      impl_to_skol_substs.regions().get_slice(subst::FnSpace).to_vec());
-    debug!("compare_const_impl: trait_to_skol_substs={}",
-           trait_to_skol_substs.repr(tcx));
+    debug!("compare_const_impl: trait_to_skol_substs={:?}",
+           trait_to_skol_substs);
 
     // Compute skolemized form of impl and trait const tys.
     let impl_ty = impl_c.ty.subst(tcx, impl_to_skol_substs);
@@ -458,23 +454,23 @@ pub fn compare_const_impl<'tcx>(tcx: &ty::ctxt<'tcx>,
         // There is no "body" here, so just pass dummy id.
         let impl_ty =
             assoc::normalize_associated_types_in(&infcx,
-                                                 &impl_param_env,
                                                  &mut fulfillment_cx,
                                                  impl_c_span,
                                                  0,
                                                  &impl_ty);
-        debug!("compare_const_impl: impl_ty={}",
-               impl_ty.repr(tcx));
+
+        debug!("compare_const_impl: impl_ty={:?}",
+               impl_ty);
 
         let trait_ty =
             assoc::normalize_associated_types_in(&infcx,
-                                                 &impl_param_env,
                                                  &mut fulfillment_cx,
                                                  impl_c_span,
                                                  0,
                                                  &trait_ty);
-        debug!("compare_const_impl: trait_ty={}",
-               trait_ty.repr(tcx));
+
+        debug!("compare_const_impl: trait_ty={:?}",
+               trait_ty);
 
         infer::mk_subty(&infcx, false, origin, impl_ty, trait_ty)
     });
@@ -482,14 +478,14 @@ pub fn compare_const_impl<'tcx>(tcx: &ty::ctxt<'tcx>,
     match err {
         Ok(()) => { }
         Err(terr) => {
-            debug!("checking associated const for compatibility: impl ty {}, trait ty {}",
-                   impl_ty.repr(tcx),
-                   trait_ty.repr(tcx));
+            debug!("checking associated const for compatibility: impl ty {:?}, trait ty {:?}",
+                   impl_ty,
+                   trait_ty);
             span_err!(tcx.sess, impl_c_span, E0326,
                       "implemented const `{}` has an incompatible type for \
                       trait: {}",
                       token::get_name(trait_c.name),
-                      ty::type_err_to_str(tcx, &terr));
+                      terr);
             return;
         }
     }

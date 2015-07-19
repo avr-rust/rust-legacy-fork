@@ -256,6 +256,21 @@ See [RFC 911] for more details on the design of `const fn`s.
 [RFC 911]: https://github.com/rust-lang/rfcs/blob/master/text/0911-const-fn.md
 "##,
 
+E0016: r##"
+Blocks in constants may only contain items (such as constant, function
+definition, etc...) and a tail expression. Example:
+
+```
+const FOO: i32 = { let x = 0; x }; // 'x' isn't an item!
+```
+
+To avoid it, you have to replace the non-item object:
+
+```
+const FOO: i32 = { const X : i32 = 0; X };
+```
+"##,
+
 E0018: r##"
 The value of static and const variables must be known at compile time. You
 can't cast a pointer as an integer because we can't know what value the
@@ -276,6 +291,42 @@ in a non-constant integer which lead to this error. Example:
 const X: u32 = 1;
 const Y: usize = &X as *const u32 as usize;
 println!("{}", Y);
+```
+"##,
+
+E0019: r##"
+A function call isn't allowed in the const's initialization expression
+because the expression's value must be known at compile-time. Example of
+erroneous code:
+
+```
+enum Test {
+    V1
+}
+
+impl Test {
+    fn test(&self) -> i32 {
+        12
+    }
+}
+
+fn main() {
+    const FOO: Test = Test::V1;
+
+    const A: i32 = FOO.test(); // You can't call Test::func() here !
+}
+```
+
+Remember: you can't use a function call inside a const's initialization
+expression! However, you can totally use it elsewhere you want:
+
+```
+fn main() {
+    const FOO: Test = Test::V1;
+
+    FOO.func(); // here is good
+    let x = FOO.func(); // or even here!
+}
 ```
 "##,
 
@@ -306,7 +357,41 @@ Ensure that the expressions given can be evaluated as the desired integer type.
 See the FFI section of the Reference for more information about using a custom
 integer type:
 
-http://doc.rust-lang.org/reference.html#ffi-attributes
+https://doc.rust-lang.org/reference.html#ffi-attributes
+"##,
+
+E0109: r##"
+You tried to give a type parameter to a type which doesn't need it. Erroneous
+code example:
+
+```
+type X = u32<i32>; // error: type parameters are not allowed on this type
+```
+
+Please check that you used the correct type and recheck its definition. Perhaps
+it doesn't need the type parameter.
+Example:
+
+```
+type X = u32; // ok!
+```
+"##,
+
+E0110: r##"
+You tried to give a lifetime parameter to a type which doesn't need it.
+Erroneous code example:
+
+```
+type X = u32<'static>; // error: lifetime parameters are not allowed on
+                       //        this type
+```
+
+Please check that you used the correct type and recheck its definition,
+perhaps it doesn't need the lifetime parameter. Example:
+
+```
+type X = u32; // ok!
+```
 "##,
 
 E0133: r##"
@@ -323,7 +408,7 @@ fn main() {
 }
 ```
 
-See also http://doc.rust-lang.org/book/unsafe.html
+See also https://doc.rust-lang.org/book/unsafe.html
 "##,
 
 E0137: r##"
@@ -517,15 +602,47 @@ const Y: u32 = X;
 
 E0267: r##"
 This error indicates the use of a loop keyword (`break` or `continue`) inside a
-closure but outside of any loop. Break and continue can be used as normal inside
-closures as long as they are also contained within a loop. To halt the execution
-of a closure you should instead use a return statement.
+closure but outside of any loop. Erroneous code example:
+
+```
+let w = || { break; }; // error: `break` inside of a closure
+```
+
+`break` and `continue` keywords can be used as normal inside closures as long as
+they are also contained within a loop. To halt the execution of a closure you
+should instead use a return statement. Example:
+
+```
+let w = || {
+    for _ in 0..10 {
+        break;
+    }
+};
+
+w();
+```
 "##,
 
 E0268: r##"
 This error indicates the use of a loop keyword (`break` or `continue`) outside
 of a loop. Without a loop to break out of or continue in, no sensible action can
-be taken.
+be taken. Erroneous code example:
+
+```
+fn some_func() {
+    break; // error: `break` outside of loop
+}
+```
+
+Please verify that you are using `break` and `continue` only in loops. Example:
+
+```
+fn some_func() {
+    for _ in 0..10 {
+        break; // ok!
+    }
+}
+```
 "##,
 
 E0271: r##"
@@ -660,6 +777,53 @@ for v in &vs {
         &1 => {}
         _ => {}
     }
+}
+```
+"##,
+
+E0277: r##"
+You tried to use a type which doesn't implement some trait in a place which
+expected that trait. Erroneous code example:
+
+```
+// here we declare the Foo trait with a bar method
+trait Foo {
+    fn bar(&self);
+}
+
+// we now declare a function which takes an object implementing the Foo trait
+fn some_func<T: Foo>(foo: T) {
+    foo.bar();
+}
+
+fn main() {
+    // we now call the method with the i32 type, which doesn't implement
+    // the Foo trait
+    some_func(5i32); // error: the trait `Foo` is not implemented for the
+                     //     type `i32`
+}
+```
+
+In order to fix this error, verify that the type you're using does implement
+the trait. Example:
+
+```
+trait Foo {
+    fn bar(&self);
+}
+
+fn some_func<T: Foo>(foo: T) {
+    foo.bar(); // we can now use this method since i32 implements the
+               // Foo trait
+}
+
+// we implement the trait on the i32 type
+impl Foo for i32 {
+    fn bar(&self) {}
+}
+
+fn main() {
+    some_func(5i32); // ok!
 }
 ```
 "##,
@@ -808,16 +972,16 @@ Updates to the borrow checker in a future version of Rust may remove this
 restriction, but for now patterns must be rewritten without sub-bindings.
 
 ```
-// Code like this...
-match Some(5) {
-    ref op_num @ Some(num) => ...
+// Before.
+match Some("hi".to_string()) {
+    ref op_string_ref @ Some(ref s) => ...
     None => ...
 }
 
 // After.
 match Some("hi".to_string()) {
     Some(ref s) => {
-        let op_string_ref = &Some(&s);
+        let op_string_ref = &Some(s);
         ...
     }
     None => ...
@@ -841,7 +1005,7 @@ a compile-time constant.
 
 E0308: r##"
 This error occurs when the compiler was unable to infer the concrete type of a
-variable. This error can occur for several cases, the most common of which is a
+variable. It can occur for several cases, the most common of which is a
 mismatch in the expected type that the compiler inferred for a variable's
 initializing expression, and the actual type explicitly assigned to the
 variable.
@@ -933,6 +1097,57 @@ From [RFC 246]:
 [RFC 246]: https://github.com/rust-lang/rfcs/pull/246
 "##,
 
+E0395: r##"
+The value assigned to a constant expression must be known at compile time,
+which is not the case when comparing raw pointers. Erroneous code example:
+
+```
+static foo: i32 = 42;
+static bar: i32 = 43;
+
+static baz: bool = { (&foo as *const i32) == (&bar as *const i32) };
+// error: raw pointers cannot be compared in statics!
+```
+
+Please check that the result of the comparison can be determined at compile time
+or isn't assigned to a constant expression. Example:
+
+```
+static foo: i32 = 42;
+static bar: i32 = 43;
+
+let baz: bool = { (&foo as *const i32) == (&bar as *const i32) };
+// baz isn't a constant expression so it's ok
+```
+"##,
+
+E0396: r##"
+The value assigned to a constant expression must be known at compile time,
+which is not the case when dereferencing raw pointers. Erroneous code
+example:
+
+```
+const foo: i32 = 42;
+const baz: *const i32 = (&foo as *const i32);
+
+const deref: i32 = *baz;
+// error: raw pointers cannot be dereferenced in constants
+```
+
+To fix this error, please do not assign this value to a constant expression.
+Example:
+
+```
+const foo: i32 = 42;
+const baz: *const i32 = (&foo as *const i32);
+
+unsafe { let deref: i32 = *baz; }
+// baz isn't a constant expression so it's ok
+```
+
+You'll also note that this assignment must be done in an unsafe block!
+"##,
+
 E0397: r##"
 It is not allowed for a mutable static to allocate or have destructors. For
 example:
@@ -944,26 +1159,57 @@ static mut FOO: Option<Box<usize>> = None;
 // error: mutable statics are not allowed to have destructors
 static mut BAR: Option<Vec<i32>> = None;
 ```
+"##,
+
+E0398: r##"
+In Rust 1.3, the default object lifetime bounds are expected to
+change, as described in RFC #1156 [1]. You are getting a warning
+because the compiler thinks it is possible that this change will cause
+a compilation error in your code. It is possible, though unlikely,
+that this is a false alarm.
+
+The heart of the change is that where `&'a Box<SomeTrait>` used to
+default to `&'a Box<SomeTrait+'a>`, it now defaults to `&'a
+Box<SomeTrait+'static>` (here, `SomeTrait` is the name of some trait
+type). Note that the only types which are affected are references to
+boxes, like `&Box<SomeTrait>` or `&[Box<SomeTrait>]`.  More common
+types like `&SomeTrait` or `Box<SomeTrait>` are unaffected.
+
+To silence this warning, edit your code to use an explicit bound.
+Most of the time, this means that you will want to change the
+signature of a function that you are calling. For example, if
+the error is reported on a call like `foo(x)`, and `foo` is
+defined as follows:
+
+```
+fn foo(arg: &Box<SomeTrait>) { ... }
+```
+
+you might change it to:
+
+```
+fn foo<'a>(arg: &Box<SomeTrait+'a>) { ... }
+```
+
+This explicitly states that you expect the trait object `SomeTrait` to
+contain references (with a maximum lifetime of `'a`).
+
+[1]: https://github.com/rust-lang/rfcs/pull/1156
 "##
 
 }
 
 
 register_diagnostics! {
-    E0016,
     E0017,
-    E0019,
     E0022,
     E0038,
-    E0109,
-    E0110,
-    E0134,
-    E0135,
+//  E0134,
+//  E0135,
     E0136,
     E0138,
     E0139,
     E0264, // unknown external lang item
-    E0266, // expected item
     E0269, // not all control paths return a value
     E0270, // computation may converge in a function marked as diverging
     E0272, // rustc_on_unimplemented attribute refers to non-existent type parameter
@@ -971,7 +1217,6 @@ register_diagnostics! {
     E0274, // rustc_on_unimplemented must have a value
     E0275, // overflow evaluating requirement
     E0276, // requirement appears on impl method but not on corresponding trait method
-    E0277, // trait is not implemented for type
     E0278, // requirement is not satisfied
     E0279, // requirement is not satisfied
     E0280, // requirement is not satisfied
@@ -991,6 +1236,5 @@ register_diagnostics! {
     E0315, // cannot invoke closure outside of its lifetime
     E0316, // nested quantification of lifetimes
     E0370, // discriminant overflow
-    E0395, // pointer comparison in const-expr
-    E0396  // pointer dereference in const-expr
+    E0400  // overloaded derefs are not allowed in constants
 }

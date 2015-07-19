@@ -154,7 +154,7 @@ macro_rules! __thread_local_inner {
 }
 
 /// Indicator of the state of a thread local storage key.
-#[unstable(feature = "std_misc",
+#[unstable(feature = "thread_local_state",
            reason = "state querying was recently added")]
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub enum LocalKeyState {
@@ -249,7 +249,7 @@ impl<T: 'static> LocalKey<T> {
     /// initialization does not panic. Keys in the `Valid` state are guaranteed
     /// to be able to be accessed. Keys in the `Destroyed` state will panic on
     /// any call to `with`.
-    #[unstable(feature = "std_misc",
+    #[unstable(feature = "thread_local_state",
                reason = "state querying was recently added")]
     pub fn state(&'static self) -> LocalKeyState {
         unsafe {
@@ -275,6 +275,7 @@ mod imp {
 
     use cell::{Cell, UnsafeCell};
     use intrinsics;
+    use ptr;
 
     pub struct Key<T> {
         inner: UnsafeCell<Option<T>>,
@@ -326,9 +327,7 @@ mod imp {
     // Due to rust-lang/rust#18804, make sure this is not generic!
     #[cfg(target_os = "linux")]
     unsafe fn register_dtor(t: *mut u8, dtor: unsafe extern fn(*mut u8)) {
-        use boxed;
         use mem;
-        use ptr;
         use libc;
         use sys_common::thread_local as os;
 
@@ -360,7 +359,7 @@ mod imp {
         type List = Vec<(*mut u8, unsafe extern fn(*mut u8))>;
         if DTORS.get().is_null() {
             let v: Box<List> = box Vec::new();
-            DTORS.set(boxed::into_raw(v) as *mut u8);
+            DTORS.set(Box::into_raw(v) as *mut u8);
         }
         let list: &mut List = &mut *(DTORS.get() as *mut List);
         list.push((t, dtor));
@@ -395,7 +394,24 @@ mod imp {
         // destructor as running for this thread so calls to `get` will return
         // `None`.
         (*ptr).dtor_running.set(true);
-        intrinsics::drop_in_place((*ptr).inner.get());
+
+        // The OSX implementation of TLS apparently had an odd aspect to it
+        // where the pointer we have may be overwritten while this destructor
+        // is running. Specifically if a TLS destructor re-accesses TLS it may
+        // trigger a re-initialization of all TLS variables, paving over at
+        // least some destroyed ones with initial values.
+        //
+        // This means that if we drop a TLS value in place on OSX that we could
+        // revert the value to its original state halfway through the
+        // destructor, which would be bad!
+        //
+        // Hence, we use `ptr::read` on OSX (to move to a "safe" location)
+        // instead of drop_in_place.
+        if cfg!(target_os = "macos") {
+            ptr::read((*ptr).inner.get());
+        } else {
+            intrinsics::drop_in_place((*ptr).inner.get());
+        }
     }
 }
 
@@ -406,7 +422,6 @@ mod imp {
 mod imp {
     use prelude::v1::*;
 
-    use alloc::boxed;
     use cell::{Cell, UnsafeCell};
     use marker;
     use ptr;
@@ -448,7 +463,7 @@ mod imp {
                 key: self,
                 value: UnsafeCell::new(None),
             };
-            let ptr = boxed::into_raw(ptr);
+            let ptr = Box::into_raw(ptr);
             self.os.set(ptr as *mut u8);
             Some(&(*ptr).value)
         }

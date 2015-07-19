@@ -16,7 +16,6 @@ use syntax::ast::{Item, ItemImpl};
 use syntax::ast;
 use syntax::ast_util;
 use syntax::visit;
-use util::ppaux::UserString;
 
 pub fn check(tcx: &ty::ctxt) {
     let mut orphan = UnsafetyChecker { tcx: tcx };
@@ -31,7 +30,7 @@ impl<'cx, 'tcx, 'v> UnsafetyChecker<'cx, 'tcx> {
     fn check_unsafety_coherence(&mut self, item: &'v ast::Item,
                                 unsafety: ast::Unsafety,
                                 polarity: ast::ImplPolarity) {
-        match ty::impl_trait_ref(self.tcx, ast_util::local_def(item.id)) {
+        match self.tcx.impl_trait_ref(ast_util::local_def(item.id)) {
             None => {
                 // Inherent impl.
                 match unsafety {
@@ -44,7 +43,7 @@ impl<'cx, 'tcx, 'v> UnsafetyChecker<'cx, 'tcx> {
             }
 
             Some(trait_ref) => {
-                let trait_def = ty::lookup_trait_def(self.tcx, trait_ref.def_id);
+                let trait_def = self.tcx.lookup_trait_def(trait_ref.def_id);
                 match (trait_def.unsafety, unsafety, polarity) {
                     (ast::Unsafety::Unsafe,
                      ast::Unsafety::Unsafe, ast::ImplPolarity::Negative) => {
@@ -55,14 +54,14 @@ impl<'cx, 'tcx, 'v> UnsafetyChecker<'cx, 'tcx> {
                     (ast::Unsafety::Normal, ast::Unsafety::Unsafe, _) => {
                         span_err!(self.tcx.sess, item.span, E0199,
                                   "implementing the trait `{}` is not unsafe",
-                                  trait_ref.user_string(self.tcx));
+                                  trait_ref);
                     }
 
                     (ast::Unsafety::Unsafe,
                      ast::Unsafety::Normal, ast::ImplPolarity::Positive) => {
                         span_err!(self.tcx.sess, item.span, E0200,
                                   "the trait `{}` requires an `unsafe impl` declaration",
-                                  trait_ref.user_string(self.tcx));
+                                  trait_ref);
                     }
 
                     (ast::Unsafety::Unsafe,

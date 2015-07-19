@@ -25,21 +25,24 @@
       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
       html_root_url = "http://doc.rust-lang.org/nightly/")]
 
-#![feature(alloc)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(collections)]
-#![feature(core)]
 #![feature(const_fn)]
+#![feature(iter_cmp)]
+#![feature(iter_arith)]
 #![feature(libc)]
+#![feature(path_ext)]
+#![feature(path_ext)]
+#![feature(path_relative_from)]
+#![feature(path_relative_from)]
 #![feature(quote)]
+#![feature(rc_weak)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
 #![feature(staged_api)]
 #![feature(unicode)]
-#![feature(path_ext)]
-#![feature(path_relative_from)]
-#![feature(std_misc)]
+#![feature(unicode)]
+#![feature(vec_push_all)]
 
 #![allow(trivial_casts)]
 
@@ -50,8 +53,8 @@ extern crate graphviz;
 extern crate libc;
 extern crate rustc;
 extern crate rustc_back;
-extern crate serialize;
 extern crate rustc_llvm as llvm;
+extern crate serialize;
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate syntax;
@@ -65,22 +68,15 @@ pub use rustc::util;
 
 pub mod back {
     pub use rustc_back::abi;
-    pub use rustc_back::archive;
-    pub use rustc_back::arm;
-    pub use rustc_back::avr;
-    pub use rustc_back::mips;
-    pub use rustc_back::mipsel;
     pub use rustc_back::rpath;
     pub use rustc_back::svh;
-    pub use rustc_back::target_strs;
-    pub use rustc_back::x86;
-    pub use rustc_back::x86_64;
 
+    pub mod archive;
     pub mod linker;
     pub mod link;
     pub mod lto;
     pub mod write;
-
+    pub mod msvc;
 }
 
 pub mod trans;

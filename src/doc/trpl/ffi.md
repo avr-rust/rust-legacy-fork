@@ -309,8 +309,8 @@ and invokes callbacks from there.
 In these cases access to Rust data structures inside the callbacks is
 especially unsafe and proper synchronization mechanisms must be used.
 Besides classical synchronization mechanisms like mutexes, one possibility in
-Rust is to use channels (in `std::comm`) to forward data from the C thread
-that invoked the callback into a Rust thread.
+Rust is to use channels (in `std::sync::mpsc`) to forward data from the C
+thread that invoked the callback into a Rust thread.
 
 If an asynchronous callback targets a special object in the Rust address space
 it is also absolutely necessary that no more callbacks are performed by the
@@ -530,3 +530,28 @@ The `extern` makes this function adhere to the C calling convention, as
 discussed above in "[Foreign Calling
 Conventions](ffi.html#foreign-calling-conventions)". The `no_mangle`
 attribute turns off Rust's name mangling, so that it is easier to link to.
+
+# FFI and panics
+
+It’s important to be mindful of `panic!`s when working with FFI. A `panic!`
+across an FFI boundary is undefined behavior. If you’re writing code that may
+panic, you should run it in another thread, so that the panic doesn’t bubble up
+to C:
+
+```rust
+use std::thread;
+
+#[no_mangle]
+pub extern fn oh_no() -> i32 {
+    let h = thread::spawn(|| {
+        panic!("Oops!");
+    });
+
+    match h.join() {
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
+}
+# fn main() {}
+```
+

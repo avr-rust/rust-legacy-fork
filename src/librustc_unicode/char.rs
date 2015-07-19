@@ -67,18 +67,6 @@ impl Iterator for ToUppercase {
     fn next(&mut self) -> Option<char> { self.0.next() }
 }
 
-/// An iterator over the titlecase mapping of a given character, returned from
-/// the [`to_titlecase` method](../primitive.char.html#method.to_titlecase) on
-/// characters.
-#[unstable(feature = "unicode", reason = "recently added")]
-pub struct ToTitlecase(CaseMappingIter);
-
-#[stable(feature = "unicode_case_mapping", since = "1.2.0")]
-impl Iterator for ToTitlecase {
-    type Item = char;
-    fn next(&mut self) -> Option<char> { self.0.next() }
-}
-
 
 enum CaseMappingIter {
     Three(char, char, char),
@@ -310,7 +298,9 @@ impl char {
     #[unstable(feature = "unicode",
                reason = "pending decision about Iterator/Writer/Reader")]
     #[inline]
-    pub fn encode_utf8(self, dst: &mut [u8]) -> Option<usize> { C::encode_utf8(self, dst) }
+    pub fn encode_utf8(self, dst: &mut [u8]) -> Option<usize> {
+        C::encode_utf8(self, dst)
+    }
 
     /// Encodes this character as UTF-16 into the provided `u16` buffer, and
     /// then returns the number of `u16`s written.
@@ -345,7 +335,9 @@ impl char {
     #[unstable(feature = "unicode",
                reason = "pending decision about Iterator/Writer/Reader")]
     #[inline]
-    pub fn encode_utf16(self, dst: &mut [u16]) -> Option<usize> { C::encode_utf16(self, dst) }
+    pub fn encode_utf16(self, dst: &mut [u16]) -> Option<usize> {
+        C::encode_utf16(self, dst)
+    }
 
     /// Returns whether the specified character is considered a Unicode
     /// alphabetic code point.
@@ -473,27 +465,6 @@ impl char {
         ToLowercase(CaseMappingIter::new(conversions::to_lower(self)))
     }
 
-    /// Converts a character to its titlecase equivalent.
-    ///
-    /// This performs complex unconditional mappings with no tailoring.
-    /// See `to_uppercase()` for references and more information.
-    ///
-    /// This differs from `to_uppercase()` since Unicode contains
-    /// digraphs and ligature characters.
-    /// For example, U+01F3 “ǳ” and U+FB01 “ﬁ”
-    /// map to U+01F1 “Ǳ” and U+0046 U+0069 “Fi”, respectively.
-    ///
-    /// # Return value
-    ///
-    /// Returns an iterator which yields the characters corresponding to the
-    /// titlecase equivalent of the character. If no conversion is possible then
-    /// an iterator with just the input character is returned.
-    #[unstable(feature = "unicode", reason = "recently added")]
-    #[inline]
-    pub fn to_titlecase(self) -> ToTitlecase {
-        ToTitlecase(CaseMappingIter::new(conversions::to_title(self)))
-    }
-
     /// Converts a character to its uppercase equivalent.
     ///
     /// This performs complex unconditional mappings with no tailoring:
@@ -541,5 +512,7 @@ impl char {
     #[unstable(feature = "unicode",
                reason = "needs expert opinion. is_cjk flag stands out as ugly")]
     #[inline]
-    pub fn width(self, is_cjk: bool) -> Option<usize> { charwidth::width(self, is_cjk) }
+    pub fn width(self, is_cjk: bool) -> Option<usize> {
+        charwidth::width(self, is_cjk)
+    }
 }
