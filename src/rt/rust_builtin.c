@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#ifndef __AVR
+
 #include <stdint.h>
 #include <time.h>
 #include <string.h>
@@ -483,7 +485,7 @@ const char * rust_current_exe() {
 }
 
 #endif
-
+#endif
 //
 // Local Variables:
 // mode: C++
