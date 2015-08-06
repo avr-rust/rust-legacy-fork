@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -12,7 +12,7 @@ use target::Target;
 
 pub fn target() -> Target {
     Target {
-        llvm_target: "avr-none".to_string(),
+        llvm_target: "avr-atmel-none".to_string(),
         target_endian: "little".to_string(),
         target_pointer_width: "16".to_string(),
         arch: "avr".to_string(),

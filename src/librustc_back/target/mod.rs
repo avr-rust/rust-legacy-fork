@@ -365,7 +365,7 @@ impl Target {
             arm_unknown_linux_gnueabi,
             arm_unknown_linux_gnueabihf,
             aarch64_unknown_linux_gnu,
-            avr_none,
+            avr_atmel_none,
             x86_64_unknown_linux_musl,
 
             arm_linux_androideabi,
