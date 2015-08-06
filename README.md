@@ -7,3 +7,9 @@ microcontroller to Rust.
 
 It uses the [AVR-LLVM backend](https://github.com/avr-llvm/llvm).
 
+## Usage
+
+AVR support is enabled using the `--target avr-atmel-none` flag.
+
+Note that the Rust `core` library (essentially required for every program),
+must be manually compiled for it to be used.
