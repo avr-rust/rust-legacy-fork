@@ -41,7 +41,3 @@ addons:
 
 notifications:
   email: false
-
-branches:
-  only:
-    - master
