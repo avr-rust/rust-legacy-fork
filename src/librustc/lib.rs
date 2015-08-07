@@ -32,18 +32,18 @@
 #![feature(clone_from_slice)]
 #![feature(collections)]
 #![feature(const_fn)]
+#![feature(core)]
 #![feature(duration)]
 #![feature(duration_span)]
 #![feature(dynamic_lib)]
 #![feature(enumset)]
 #![feature(fs_canonicalize)]
-#![feature(hash_default)]
 #![feature(hashmap_hasher)]
 #![feature(into_cow)]
 #![feature(iter_cmp)]
 #![feature(iter_arith)]
 #![feature(libc)]
-#![feature(map_in_place)]
+#![feature(nonzero)]
 #![feature(num_bits_bytes)]
 #![feature(path_ext)]
 #![feature(quote)]
@@ -55,7 +55,6 @@
 #![feature(slice_bytes)]
 #![feature(slice_splits)]
 #![feature(slice_patterns)]
-#![feature(slice_position_elem)]
 #![feature(staged_api)]
 #![feature(str_char)]
 #![feature(str_match_indices)]
@@ -68,6 +67,7 @@
 #![allow(trivial_casts)]
 
 extern crate arena;
+extern crate core;
 extern crate flate;
 extern crate fmt_macros;
 extern crate getopts;

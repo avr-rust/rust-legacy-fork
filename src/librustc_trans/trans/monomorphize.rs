@@ -29,7 +29,6 @@ use middle::ty::{self, HasTypeFlags, Ty};
 
 use syntax::abi;
 use syntax::ast;
-use syntax::ast_util::local_def;
 use syntax::attr;
 use syntax::codemap::DUMMY_SP;
 use std::hash::{Hasher, Hash, SipHasher};
@@ -137,10 +136,9 @@ pub fn monomorphic_fn<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
         let lldecl = if abi != abi::Rust {
             foreign::decl_rust_fn_with_foreign_abi(ccx, mono_ty, &s[..])
         } else {
-            // FIXME(nagisa): perhaps needs a more fine grained selection? See setup_lldecl below.
-            declare::define_internal_rust_fn(ccx, &s[..], mono_ty).unwrap_or_else(||{
-                ccx.sess().bug(&format!("symbol `{}` already defined", s));
-            })
+            // FIXME(nagisa): perhaps needs a more fine grained selection? See
+            // setup_lldecl below.
+            declare::define_internal_rust_fn(ccx, &s, mono_ty)
         };
 
         ccx.monomorphized().borrow_mut().insert(hash_id.take().unwrap(), lldecl);
@@ -193,24 +191,11 @@ pub fn monomorphic_fn<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
             }
         }
         ast_map::NodeVariant(v) => {
-            let parent = ccx.tcx().map.get_parent(fn_id.node);
-            let tvs = ccx.tcx().enum_variants(local_def(parent));
-            let this_tv = tvs.iter().find(|tv| { tv.id.node == fn_id.node}).unwrap();
+            let variant = inlined_variant_def(ccx, fn_id.node);
+            assert_eq!(v.node.name.name, variant.name);
             let d = mk_lldecl(abi::Rust);
             attributes::inline(d, attributes::InlineAttr::Hint);
-            match v.node.kind {
-                ast::TupleVariantKind(ref args) => {
-                    trans_enum_variant(ccx,
-                                       parent,
-                                       &*v,
-                                       &args[..],
-                                       this_tv.disr_val,
-                                       psubsts,
-                                       d);
-                }
-                ast::StructVariantKind(_) =>
-                    ccx.sess().bug("can't monomorphize struct variants"),
-            }
+            trans_enum_variant(ccx, fn_id.node, variant.disr_val, psubsts, d);
             d
         }
         ast_map::NodeImplItem(impl_item) => {
@@ -256,7 +241,6 @@ pub fn monomorphic_fn<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
             let d = mk_lldecl(abi::Rust);
             attributes::inline(d, attributes::InlineAttr::Hint);
             base::trans_tuple_struct(ccx,
-                                     &struct_def.fields,
                                      struct_def.ctor_id.expect("ast-mapped tuple struct \
                                                                 didn't have a ctor id"),
                                      psubsts,
@@ -267,6 +251,7 @@ pub fn monomorphic_fn<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
         // Ugh -- but this ensures any new variants won't be forgotten
         ast_map::NodeForeignItem(..) |
         ast_map::NodeLifetime(..) |
+        ast_map::NodeTyParam(..) |
         ast_map::NodeExpr(..) |
         ast_map::NodeStmt(..) |
         ast_map::NodeArg(..) |
@@ -300,6 +285,16 @@ pub fn apply_param_substs<'tcx,T>(tcx: &ty::ctxt<'tcx>,
 {
     let substituted = value.subst(tcx, param_substs);
     normalize_associated_type(tcx, &substituted)
+}
+
+
+/// Returns the normalized type of a struct field
+pub fn field_ty<'tcx>(tcx: &ty::ctxt<'tcx>,
+                      param_substs: &Substs<'tcx>,
+                      f: ty::FieldDef<'tcx>)
+                      -> Ty<'tcx>
+{
+    normalize_associated_type(tcx, &f.ty(tcx, param_substs))
 }
 
 /// Removes associated types, if any. Since this during

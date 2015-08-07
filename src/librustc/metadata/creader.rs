@@ -33,16 +33,23 @@ use syntax::attr::AttrMetaMethods;
 use syntax::codemap::{self, Span, mk_sp, Pos};
 use syntax::parse;
 use syntax::parse::token::InternedString;
-use syntax::parse::token;
 use syntax::visit;
+use syntax::util::small_vector::SmallVector;
+use ast_map;
 use log;
+
+pub struct LocalCrateReader<'a, 'b:'a> {
+    sess: &'a Session,
+    creader: CrateReader<'a>,
+    ast_map: &'a ast_map::Map<'b>,
+}
 
 pub struct CrateReader<'a> {
     sess: &'a Session,
     next_crate_num: ast::CrateNum,
 }
 
-impl<'a, 'v> visit::Visitor<'v> for CrateReader<'a> {
+impl<'a, 'b, 'v> visit::Visitor<'v> for LocalCrateReader<'a, 'b> {
     fn visit_item(&mut self, a: &ast::Item) {
         self.process_item(a);
         visit::walk_item(self, a);
@@ -153,150 +160,27 @@ impl<'a> CrateReader<'a> {
         }
     }
 
-    // Traverses an AST, reading all the information about use'd crates and
-    // extern libraries necessary for later resolving, typechecking, linking,
-    // etc.
-    pub fn read_crates(&mut self, krate: &ast::Crate) {
-        self.process_crate(krate);
-        visit::walk_crate(self, krate);
-
-        if log_enabled!(log::DEBUG) {
-            dump_crates(&self.sess.cstore);
-        }
-
-        for &(ref name, kind) in &self.sess.opts.libs {
-            register_native_lib(self.sess, None, name.clone(), kind);
-        }
-    }
-
-    fn process_crate(&self, c: &ast::Crate) {
-        for a in c.attrs.iter().filter(|m| m.name() == "link_args") {
-            match a.value_str() {
-                Some(ref linkarg) => self.sess.cstore.add_used_link_args(&linkarg),
-                None => { /* fallthrough */ }
-            }
-        }
-    }
-
     fn extract_crate_info(&self, i: &ast::Item) -> Option<CrateInfo> {
         match i.node {
             ast::ItemExternCrate(ref path_opt) => {
-                let ident = token::get_ident(i.ident);
                 debug!("resolving extern crate stmt. ident: {} path_opt: {:?}",
-                       ident, path_opt);
+                       i.ident, path_opt);
                 let name = match *path_opt {
                     Some(name) => {
-                        validate_crate_name(Some(self.sess), name.as_str(),
+                        validate_crate_name(Some(self.sess), &name.as_str(),
                                             Some(i.span));
-                        name.as_str().to_string()
+                        name.to_string()
                     }
-                    None => ident.to_string(),
+                    None => i.ident.to_string(),
                 };
                 Some(CrateInfo {
-                    ident: ident.to_string(),
+                    ident: i.ident.to_string(),
                     name: name,
                     id: i.id,
                     should_link: should_link(i),
                 })
             }
             _ => None
-        }
-    }
-
-    fn process_item(&mut self, i: &ast::Item) {
-        match i.node {
-            ast::ItemExternCrate(_) => {
-                if !should_link(i) {
-                    return;
-                }
-
-                match self.extract_crate_info(i) {
-                    Some(info) => {
-                        let (cnum, _, _) = self.resolve_crate(&None,
-                                                              &info.ident,
-                                                              &info.name,
-                                                              None,
-                                                              i.span,
-                                                              PathKind::Crate);
-                        self.sess.cstore.add_extern_mod_stmt_cnum(info.id, cnum);
-                    }
-                    None => ()
-                }
-            }
-            ast::ItemForeignMod(ref fm) => {
-                if fm.abi == abi::Rust || fm.abi == abi::RustIntrinsic {
-                    return;
-                }
-
-                // First, add all of the custom link_args attributes
-                let link_args = i.attrs.iter()
-                    .filter_map(|at| if at.name() == "link_args" {
-                        Some(at)
-                    } else {
-                        None
-                    })
-                    .collect::<Vec<&ast::Attribute>>();
-                for m in &link_args {
-                    match m.value_str() {
-                        Some(linkarg) => self.sess.cstore.add_used_link_args(&linkarg),
-                        None => { /* fallthrough */ }
-                    }
-                }
-
-                // Next, process all of the #[link(..)]-style arguments
-                let link_args = i.attrs.iter()
-                    .filter_map(|at| if at.name() == "link" {
-                        Some(at)
-                    } else {
-                        None
-                    })
-                    .collect::<Vec<&ast::Attribute>>();
-                for m in &link_args {
-                    match m.meta_item_list() {
-                        Some(items) => {
-                            let kind = items.iter().find(|k| {
-                                k.name() == "kind"
-                            }).and_then(|a| a.value_str());
-                            let kind = match kind {
-                                Some(k) => {
-                                    if k == "static" {
-                                        cstore::NativeStatic
-                                    } else if self.sess.target.target.options.is_like_osx
-                                              && k == "framework" {
-                                        cstore::NativeFramework
-                                    } else if k == "framework" {
-                                        cstore::NativeFramework
-                                    } else if k == "dylib" {
-                                        cstore::NativeUnknown
-                                    } else {
-                                        self.sess.span_err(m.span,
-                                            &format!("unknown kind: `{}`",
-                                                    k));
-                                        cstore::NativeUnknown
-                                    }
-                                }
-                                None => cstore::NativeUnknown
-                            };
-                            let n = items.iter().find(|n| {
-                                n.name() == "name"
-                            }).and_then(|a| a.value_str());
-                            let n = match n {
-                                Some(n) => n,
-                                None => {
-                                    self.sess.span_err(m.span,
-                                        "#[link(...)] specified without \
-                                         `name = \"foo\"`");
-                                    InternedString::new("foo")
-                                }
-                            };
-                            register_native_lib(self.sess, Some(m.span),
-                                                n.to_string(), kind);
-                        }
-                        None => {}
-                    }
-                }
-            }
-            _ => { }
         }
     }
 
@@ -377,14 +261,17 @@ impl<'a> CrateReader<'a> {
         let loader::Library { dylib, rlib, metadata } = lib;
 
         let cnum_map = self.resolve_crate_deps(root, metadata.as_slice(), span);
+        let staged_api = self.is_staged_api(metadata.as_slice());
 
         let cmeta = Rc::new( cstore::crate_metadata {
             name: name.to_string(),
+            local_path: RefCell::new(SmallVector::zero()),
             data: metadata,
             cnum_map: cnum_map,
             cnum: cnum,
             codemap_import_info: RefCell::new(vec![]),
             span: span,
+            staged_api: staged_api
         });
 
         let source = cstore::CrateSource {
@@ -396,6 +283,17 @@ impl<'a> CrateReader<'a> {
         self.sess.cstore.set_crate_data(cnum, cmeta.clone());
         self.sess.cstore.add_used_crate_source(source.clone());
         (cnum, cmeta, source)
+    }
+
+    fn is_staged_api(&self, data: &[u8]) -> bool {
+        let attrs = decoder::get_crate_attributes(data);
+        for attr in &attrs {
+            if &attr.name()[..] == "staged_api" {
+                match attr.node.value.node { ast::MetaWord(_) => return true, _ => (/*pass*/) }
+            }
+        }
+
+        return false;
     }
 
     fn resolve_crate(&mut self,
@@ -594,6 +492,140 @@ impl<'a> CrateReader<'a> {
     }
 }
 
+impl<'a, 'b> LocalCrateReader<'a, 'b> {
+    pub fn new(sess: &'a Session, map: &'a ast_map::Map<'b>) -> LocalCrateReader<'a, 'b> {
+        LocalCrateReader {
+            sess: sess,
+            creader: CrateReader::new(sess),
+            ast_map: map,
+        }
+    }
+
+    // Traverses an AST, reading all the information about use'd crates and
+    // extern libraries necessary for later resolving, typechecking, linking,
+    // etc.
+    pub fn read_crates(&mut self, krate: &ast::Crate) {
+        self.process_crate(krate);
+        visit::walk_crate(self, krate);
+
+        if log_enabled!(log::DEBUG) {
+            dump_crates(&self.sess.cstore);
+        }
+
+        for &(ref name, kind) in &self.sess.opts.libs {
+            register_native_lib(self.sess, None, name.clone(), kind);
+        }
+    }
+
+    fn process_crate(&self, c: &ast::Crate) {
+        for a in c.attrs.iter().filter(|m| m.name() == "link_args") {
+            match a.value_str() {
+                Some(ref linkarg) => self.sess.cstore.add_used_link_args(&linkarg),
+                None => { /* fallthrough */ }
+            }
+        }
+    }
+
+    fn process_item(&mut self, i: &ast::Item) {
+        match i.node {
+            ast::ItemExternCrate(_) => {
+                if !should_link(i) {
+                    return;
+                }
+
+                match self.creader.extract_crate_info(i) {
+                    Some(info) => {
+                        let (cnum, cmeta, _) = self.creader.resolve_crate(&None,
+                                                              &info.ident,
+                                                              &info.name,
+                                                              None,
+                                                              i.span,
+                                                              PathKind::Crate);
+                        self.ast_map.with_path(i.id, |path|
+                            cmeta.update_local_path(path));
+                        self.sess.cstore.add_extern_mod_stmt_cnum(info.id, cnum);
+                    }
+                    None => ()
+                }
+            }
+            ast::ItemForeignMod(ref fm) => {
+                if fm.abi == abi::Rust || fm.abi == abi::RustIntrinsic {
+                    return;
+                }
+
+                // First, add all of the custom link_args attributes
+                let link_args = i.attrs.iter()
+                    .filter_map(|at| if at.name() == "link_args" {
+                        Some(at)
+                    } else {
+                        None
+                    })
+                    .collect::<Vec<&ast::Attribute>>();
+                for m in &link_args {
+                    match m.value_str() {
+                        Some(linkarg) => self.sess.cstore.add_used_link_args(&linkarg),
+                        None => { /* fallthrough */ }
+                    }
+                }
+
+                // Next, process all of the #[link(..)]-style arguments
+                let link_args = i.attrs.iter()
+                    .filter_map(|at| if at.name() == "link" {
+                        Some(at)
+                    } else {
+                        None
+                    })
+                    .collect::<Vec<&ast::Attribute>>();
+                for m in &link_args {
+                    match m.meta_item_list() {
+                        Some(items) => {
+                            let kind = items.iter().find(|k| {
+                                k.name() == "kind"
+                            }).and_then(|a| a.value_str());
+                            let kind = match kind {
+                                Some(k) => {
+                                    if k == "static" {
+                                        cstore::NativeStatic
+                                    } else if self.sess.target.target.options.is_like_osx
+                                              && k == "framework" {
+                                        cstore::NativeFramework
+                                    } else if k == "framework" {
+                                        cstore::NativeFramework
+                                    } else if k == "dylib" {
+                                        cstore::NativeUnknown
+                                    } else {
+                                        self.sess.span_err(m.span,
+                                            &format!("unknown kind: `{}`",
+                                                    k));
+                                        cstore::NativeUnknown
+                                    }
+                                }
+                                None => cstore::NativeUnknown
+                            };
+                            let n = items.iter().find(|n| {
+                                n.name() == "name"
+                            }).and_then(|a| a.value_str());
+                            let n = match n {
+                                Some(n) => n,
+                                None => {
+                                    self.sess.span_err(m.span,
+                                        "#[link(...)] specified without \
+                                         `name = \"foo\"`");
+                                    InternedString::new("foo")
+                                }
+                            };
+                            register_native_lib(self.sess, Some(m.span),
+                                                n.to_string(), kind);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            _ => { }
+        }
+    }
+}
+
 /// Imports the codemap from an external crate into the codemap of the crate
 /// currently being compiled (the "local crate").
 ///
@@ -660,14 +692,14 @@ pub fn import_codemap(local_codemap: &codemap::CodeMap,
                 // `CodeMap::new_imported_filemap()` will then translate those
                 // coordinates to their new global frame of reference when the
                 // offset of the FileMap is known.
-                let lines = lines.into_inner().map_in_place(|pos| pos - start_pos);
-                let multibyte_chars = multibyte_chars
-                    .into_inner()
-                    .map_in_place(|mbc|
-                        codemap::MultiByteChar {
-                            pos: mbc.pos - start_pos,
-                            bytes: mbc.bytes
-                        });
+                let mut lines = lines.into_inner();
+                for pos in &mut lines {
+                    *pos = *pos - start_pos;
+                }
+                let mut multibyte_chars = multibyte_chars.into_inner();
+                for mbc in &mut multibyte_chars {
+                    mbc.pos = mbc.pos - start_pos;
+                }
 
                 let local_version = local_codemap.new_imported_filemap(name,
                                                                        source_length,

@@ -8,9 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Utilities for slice manipulation
+//! A dynamically-sized view into a contiguous sequence, `[T]`.
 //!
-//! The `slice` module contains useful code to help work with slice values.
 //! Slices are a view into a block of memory represented as a pointer and a
 //! length.
 //!
@@ -78,7 +77,8 @@
 //!   iterators.
 //! * Further methods that return iterators are `.split()`, `.splitn()`,
 //!   `.chunks()`, `.windows()` and more.
-#![doc(primitive = "slice")]
+//!
+//! *[See also the slice primitive type](../primitive.slice.html).*
 #![stable(feature = "rust1", since = "1.0.0")]
 
 // Many of the usings in this module are only used in the test configuration.
@@ -762,12 +762,16 @@ impl<T> [T] {
 
     /// Find the first index containing a matching value.
     #[unstable(feature = "slice_position_elem")]
+    #[deprecated(since = "1.3.0",
+                 reason = "less idiomatic than .iter().position()")]
     pub fn position_elem(&self, t: &T) -> Option<usize> where T: PartialEq {
         core_slice::SliceExt::position_elem(self, t)
     }
 
     /// Find the last index containing a matching value.
     #[unstable(feature = "slice_position_elem")]
+    #[deprecated(since = "1.3.0",
+                 reason = "less idiomatic than .iter().rev().position()")]
     pub fn rposition_elem(&self, t: &T) -> Option<usize> where T: PartialEq {
         core_slice::SliceExt::rposition_elem(self, t)
     }
@@ -883,7 +887,8 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```rust
-    /// # #![feature(permutations)]
+    /// #![feature(permutations)]
+    ///
     /// let v = [1, 2, 3];
     /// let mut perms = v.permutations();
     ///
@@ -895,7 +900,8 @@ impl<T> [T] {
     /// Iterating through permutations one by one.
     ///
     /// ```rust
-    /// # #![feature(permutations)]
+    /// #![feature(permutations)]
+    ///
     /// let v = [1, 2, 3];
     /// let mut perms = v.permutations();
     ///
@@ -920,7 +926,8 @@ impl<T> [T] {
     /// # Example
     ///
     /// ```rust
-    /// # #![feature(permutations)]
+    /// #![feature(permutations)]
+    ///
     /// let v: &mut [_] = &mut [0, 1, 2];
     /// v.next_permutation();
     /// let b: &mut [_] = &mut [0, 2, 1];
@@ -945,7 +952,8 @@ impl<T> [T] {
     /// # Example
     ///
     /// ```rust
-    /// # #![feature(permutations)]
+    /// #![feature(permutations)]
+    ///
     /// let v: &mut [_] = &mut [1, 0, 2];
     /// v.prev_permutation();
     /// let b: &mut [_] = &mut [0, 2, 1];
@@ -969,7 +977,8 @@ impl<T> [T] {
     /// # Example
     ///
     /// ```rust
-    /// # #![feature(clone_from_slice)]
+    /// #![feature(clone_from_slice)]
+    ///
     /// let mut dst = [0, 0, 0];
     /// let src = [1, 2];
     ///
@@ -1000,7 +1009,8 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```rust
-    /// # #![feature(move_from)]
+    /// #![feature(move_from)]
+    ///
     /// let mut a = [1, 2, 3, 4, 5];
     /// let b = vec![6, 7, 8];
     /// let num_moved = a.move_from(b, 0, 3);
@@ -1009,6 +1019,8 @@ impl<T> [T] {
     /// ```
     #[unstable(feature = "move_from",
                reason = "uncertain about this API approach")]
+    #[deprecated(since = "1.3.0",
+                 reason = "unclear that it must belong in the standard library")]
     #[inline]
     pub fn move_from(&mut self, mut src: Vec<T>, start: usize, end: usize) -> usize {
         for (a, b) in self.iter_mut().zip(&mut src[start .. end]) {

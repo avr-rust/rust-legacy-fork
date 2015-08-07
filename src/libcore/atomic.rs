@@ -72,12 +72,13 @@
 
 use self::Ordering::*;
 
-use marker::Sync;
+use marker::{Send, Sync};
 
 use intrinsics;
 use cell::UnsafeCell;
 
 use default::Default;
+use fmt;
 
 /// A boolean type which can be safely shared between threads.
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -133,6 +134,7 @@ impl<T> Default for AtomicPtr<T> {
     }
 }
 
+unsafe impl<T> Send for AtomicPtr<T> {}
 unsafe impl<T> Sync for AtomicPtr<T> {}
 
 /// Atomic memory orderings
@@ -144,7 +146,7 @@ unsafe impl<T> Sync for AtomicPtr<T> {}
 /// "relaxed" atomics allow all reorderings.
 ///
 /// Rust's memory orderings are [the same as
-/// C++'s](http://gcc.gnu.org/wiki/Atomic/GCCMM/AtomicSync).
+/// LLVM's](http://llvm.org/docs/LangRef.html#memory-model-for-concurrent-operations).
 #[stable(feature = "rust1", since = "1.0.0")]
 #[derive(Copy, Clone)]
 pub enum Ordering {
@@ -1087,5 +1089,25 @@ pub fn fence(order: Ordering) {
             SeqCst  => intrinsics::atomic_fence(),
             Relaxed => panic!("there is no such thing as a relaxed fence")
         }
+    }
+}
+
+macro_rules! impl_Debug {
+    ($($t:ident)*) => ($(
+        #[stable(feature = "atomic_debug", since = "1.3.0")]
+        impl fmt::Debug for $t {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.debug_tuple(stringify!($t)).field(&self.load(Ordering::SeqCst)).finish()
+            }
+        }
+    )*);
+}
+
+impl_Debug!{ AtomicUsize AtomicIsize AtomicBool }
+
+#[stable(feature = "atomic_debug", since = "1.3.0")]
+impl<T> fmt::Debug for AtomicPtr<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("AtomicPtr").field(&self.load(Ordering::SeqCst)).finish()
     }
 }

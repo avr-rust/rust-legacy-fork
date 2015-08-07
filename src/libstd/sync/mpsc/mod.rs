@@ -265,6 +265,7 @@
 // And now that you've seen all the races that I found and attempted to fix,
 // here's the code for you to find some more!
 
+#[cfg(stage0)]
 use prelude::v1::*;
 
 use sync::Arc;
@@ -1107,7 +1108,7 @@ impl error::Error for TryRecvError {
 mod tests {
     use prelude::v1::*;
 
-    use std::env;
+    use env;
     use super::*;
     use thread;
 
@@ -1655,7 +1656,7 @@ mod tests {
 mod sync_tests {
     use prelude::v1::*;
 
-    use std::env;
+    use env;
     use thread;
     use super::*;
 

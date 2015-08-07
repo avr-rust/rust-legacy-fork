@@ -34,6 +34,7 @@ use lint::builtin;
 use util::nodemap::FnvHashMap;
 
 use std::cell::RefCell;
+use std::cmp;
 use std::mem;
 use syntax::ast_util::IdVisitingOperation;
 use syntax::attr::AttrMetaMethods;
@@ -66,6 +67,9 @@ pub struct LintStore {
     /// Map of registered lint groups to what lints they expand to. The bool
     /// is true if the lint group was added by a plugin.
     lint_groups: FnvHashMap<&'static str, (Vec<LintId>, bool)>,
+
+    /// Maximum level a lint can be
+    lint_cap: Option<Level>,
 }
 
 /// The targed of the `by_name` map, which accounts for renaming/deprecation.
@@ -75,6 +79,15 @@ enum TargetLint {
 
     /// Temporary renaming, used for easing migration pain; see #16545
     Renamed(String, LintId),
+
+    /// Lint with this name existed previously, but has been removed/deprecated.
+    /// The string argument is the reason for removal.
+    Removed(String),
+}
+
+enum FindLintError {
+    NotFound,
+    Removed
 }
 
 impl LintStore {
@@ -85,7 +98,10 @@ impl LintStore {
         }
     }
 
-    fn set_level(&mut self, lint: LintId, lvlsrc: LevelSource) {
+    fn set_level(&mut self, lint: LintId, mut lvlsrc: LevelSource) {
+        if let Some(cap) = self.lint_cap {
+            lvlsrc.0 = cmp::min(lvlsrc.0, cap);
+        }
         if lvlsrc.0 == Allow {
             self.levels.remove(&lint);
         } else {
@@ -100,6 +116,7 @@ impl LintStore {
             by_name: FnvHashMap(),
             levels: FnvHashMap(),
             lint_groups: FnvHashMap(),
+            lint_cap: None,
         }
     }
 
@@ -166,12 +183,16 @@ impl LintStore {
         self.by_name.insert(old_name.to_string(), Renamed(new_name.to_string(), target));
     }
 
+    pub fn register_removed(&mut self, name: &str, reason: &str) {
+        self.by_name.insert(name.into(), Removed(reason.into()));
+    }
+
     #[allow(unused_variables)]
     fn find_lint(&self, lint_name: &str, sess: &Session, span: Option<Span>)
-                 -> Option<LintId>
+                 -> Result<LintId, FindLintError>
     {
         match self.by_name.get(lint_name) {
-            Some(&Id(lint_id)) => Some(lint_id),
+            Some(&Id(lint_id)) => Ok(lint_id),
             Some(&Renamed(ref new_name, lint_id)) => {
                 let warning = format!("lint {} has been renamed to {}",
                                       lint_name, new_name);
@@ -179,17 +200,25 @@ impl LintStore {
                     Some(span) => sess.span_warn(span, &warning[..]),
                     None => sess.warn(&warning[..]),
                 };
-                Some(lint_id)
-            }
-            None => None
+                Ok(lint_id)
+            },
+            Some(&Removed(ref reason)) => {
+                let warning = format!("lint {} has been removed: {}", lint_name, reason);
+                match span {
+                    Some(span) => sess.span_warn(span, &warning[..]),
+                    None => sess.warn(&warning[..])
+                }
+                Err(FindLintError::Removed)
+            },
+            None => Err(FindLintError::NotFound)
         }
     }
 
     pub fn process_command_line(&mut self, sess: &Session) {
         for &(ref lint_name, level) in &sess.opts.lint_opts {
             match self.find_lint(&lint_name[..], sess, None) {
-                Some(lint_id) => self.set_level(lint_id, (level, CommandLine)),
-                None => {
+                Ok(lint_id) => self.set_level(lint_id, (level, CommandLine)),
+                Err(_) => {
                     match self.lint_groups.iter().map(|(&x, pair)| (x, pair.0.clone()))
                                                  .collect::<FnvHashMap<&'static str,
                                                                        Vec<LintId>>>()
@@ -204,6 +233,13 @@ impl LintStore {
                                                  level.as_str(), lint_name)),
                     }
                 }
+            }
+        }
+
+        self.lint_cap = sess.opts.lint_cap;
+        if let Some(cap) = self.lint_cap {
+            for level in self.levels.iter_mut().map(|p| &mut (p.1).0) {
+                *level = cmp::min(*level, cap);
             }
         }
     }
@@ -398,8 +434,8 @@ impl<'a, 'tcx> Context<'a, 'tcx> {
                 }
                 Ok((lint_name, level, span)) => {
                     match self.lints.find_lint(&lint_name, &self.tcx.sess, Some(span)) {
-                        Some(lint_id) => vec![(lint_id, level, span)],
-                        None => {
+                        Ok(lint_id) => vec![(lint_id, level, span)],
+                        Err(FindLintError::NotFound) => {
                             match self.lints.lint_groups.get(&lint_name[..]) {
                                 Some(&(ref v, _)) => v.iter()
                                                       .map(|lint_id: &LintId|
@@ -412,7 +448,8 @@ impl<'a, 'tcx> Context<'a, 'tcx> {
                                     continue;
                                 }
                             }
-                        }
+                        },
+                        Err(FindLintError::Removed) => { continue; }
                     }
                 }
             };

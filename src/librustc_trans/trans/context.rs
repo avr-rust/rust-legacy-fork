@@ -117,9 +117,6 @@ pub struct LocalCrateContext<'tcx> {
     /// Cache of emitted const values
     const_values: RefCell<FnvHashMap<(ast::NodeId, &'tcx Substs<'tcx>), ValueRef>>,
 
-    /// Cache of emitted static values
-    static_values: RefCell<NodeMap<ValueRef>>,
-
     /// Cache of external const values
     extern_const_values: RefCell<DefIdMap<ValueRef>>,
 
@@ -127,6 +124,12 @@ pub struct LocalCrateContext<'tcx> {
 
     /// Cache of closure wrappers for bare fn's.
     closure_bare_wrapper_cache: RefCell<FnvHashMap<ValueRef, ValueRef>>,
+
+    /// List of globals for static variables which need to be passed to the
+    /// LLVM function ReplaceAllUsesWith (RAUW) when translation is complete.
+    /// (We have to make sure we don't invalidate any ValueRefs referring
+    /// to constants.)
+    statics_to_rauw: RefCell<Vec<(ValueRef, ValueRef)>>,
 
     lltypes: RefCell<FnvHashMap<Ty<'tcx>, Type>>,
     llsizingtypes: RefCell<FnvHashMap<Ty<'tcx>, Type>>,
@@ -142,6 +145,8 @@ pub struct LocalCrateContext<'tcx> {
     dbg_cx: Option<debuginfo::CrateDebugContext<'tcx>>,
 
     eh_personality: RefCell<Option<ValueRef>>,
+    rust_try_fn: RefCell<Option<ValueRef>>,
+    unwind_resume_hooked: Cell<bool>,
 
     intrinsics: RefCell<FnvHashMap<&'static str, ValueRef>>,
 
@@ -447,10 +452,10 @@ impl<'tcx> LocalCrateContext<'tcx> {
                 const_unsized: RefCell::new(FnvHashMap()),
                 const_globals: RefCell::new(FnvHashMap()),
                 const_values: RefCell::new(FnvHashMap()),
-                static_values: RefCell::new(NodeMap()),
                 extern_const_values: RefCell::new(DefIdMap()),
                 impl_method_cache: RefCell::new(FnvHashMap()),
                 closure_bare_wrapper_cache: RefCell::new(FnvHashMap()),
+                statics_to_rauw: RefCell::new(Vec::new()),
                 lltypes: RefCell::new(FnvHashMap()),
                 llsizingtypes: RefCell::new(FnvHashMap()),
                 adt_reprs: RefCell::new(FnvHashMap()),
@@ -461,6 +466,8 @@ impl<'tcx> LocalCrateContext<'tcx> {
                 closure_vals: RefCell::new(FnvHashMap()),
                 dbg_cx: dbg_cx,
                 eh_personality: RefCell::new(None),
+                rust_try_fn: RefCell::new(None),
+                unwind_resume_hooked: Cell::new(false),
                 intrinsics: RefCell::new(FnvHashMap()),
                 n_llvm_insns: Cell::new(0),
                 trait_cache: RefCell::new(FnvHashMap()),
@@ -657,10 +664,6 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
         &self.local.const_values
     }
 
-    pub fn static_values<'a>(&'a self) -> &'a RefCell<NodeMap<ValueRef>> {
-        &self.local.static_values
-    }
-
     pub fn extern_const_values<'a>(&'a self) -> &'a RefCell<DefIdMap<ValueRef>> {
         &self.local.extern_const_values
     }
@@ -672,6 +675,10 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
 
     pub fn closure_bare_wrapper_cache<'a>(&'a self) -> &'a RefCell<FnvHashMap<ValueRef, ValueRef>> {
         &self.local.closure_bare_wrapper_cache
+    }
+
+    pub fn statics_to_rauw<'a>(&'a self) -> &'a RefCell<Vec<(ValueRef, ValueRef)>> {
+        &self.local.statics_to_rauw
     }
 
     pub fn lltypes<'a>(&'a self) -> &'a RefCell<FnvHashMap<Ty<'tcx>, Type>> {
@@ -724,6 +731,14 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
 
     pub fn eh_personality<'a>(&'a self) -> &'a RefCell<Option<ValueRef>> {
         &self.local.eh_personality
+    }
+
+    pub fn rust_try_fn<'a>(&'a self) -> &'a RefCell<Option<ValueRef>> {
+        &self.local.rust_try_fn
+    }
+
+    pub fn unwind_resume_hooked<'a>(&'a self) -> &'a Cell<bool> {
+        &self.local.unwind_resume_hooked
     }
 
     fn intrinsics<'a>(&'a self) -> &'a RefCell<FnvHashMap<&'static str, ValueRef>> {
@@ -923,6 +938,7 @@ fn declare_intrinsic(ccx: &CrateContext, key: & &'static str) -> Option<ValueRef
     ifn!("llvm.lifetime.end", fn(t_i64, i8p) -> void);
 
     ifn!("llvm.expect.i1", fn(i1, i1) -> i1);
+    ifn!("llvm.eh.typeid.for", fn(i8p) -> t_i32);
 
     // Some intrinsics were introduced in later versions of LLVM, but they have
     // fallbacks in libc or libm and such.

@@ -286,10 +286,9 @@ impl<'a,'tcx> ProbeContext<'a,'tcx> {
                 self.assemble_inherent_candidates_from_object(self_ty, data);
                 self.assemble_inherent_impl_candidates_for_type(data.principal_def_id());
             }
-            ty::TyEnum(did, _) |
-            ty::TyStruct(did, _) |
-            ty::TyClosure(did, _) => {
-                self.assemble_inherent_impl_candidates_for_type(did);
+            ty::TyEnum(def, _) |
+            ty::TyStruct(def, _) => {
+                self.assemble_inherent_impl_candidates_for_type(def.did);
             }
             ty::TyBox(_) => {
                 if let Some(box_did) = self.tcx().lang_items.owned_box() {
@@ -1200,16 +1199,12 @@ impl<'a,'tcx> ProbeContext<'a,'tcx> {
             return impl_ty;
         }
 
-        let placeholder;
+        let mut placeholder;
         let mut substs = substs;
         if
             !method.generics.types.is_empty_in(subst::FnSpace) ||
             !method.generics.regions.is_empty_in(subst::FnSpace)
         {
-            let method_types =
-                self.infcx().next_ty_vars(
-                    method.generics.types.len(subst::FnSpace));
-
             // In general, during probe we erase regions. See
             // `impl_self_ty()` for an explanation.
             let method_regions =
@@ -1218,7 +1213,14 @@ impl<'a,'tcx> ProbeContext<'a,'tcx> {
                 .map(|_| ty::ReStatic)
                 .collect();
 
-            placeholder = (*substs).clone().with_method(method_types, method_regions);
+            placeholder = (*substs).clone().with_method(Vec::new(), method_regions);
+
+            self.infcx().type_vars_for_defs(
+                self.span,
+                subst::FnSpace,
+                &mut placeholder,
+                method.generics.types.get_slice(subst::FnSpace));
+
             substs = &placeholder;
         }
 

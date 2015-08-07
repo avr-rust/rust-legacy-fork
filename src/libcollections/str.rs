@@ -8,43 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Unicode string manipulation (the `str` type).
+//! Unicode string slices
 //!
-//! Rust's `str` type is one of the core primitive types of the language. `&str`
-//! is the borrowed string type. This type of string can only be created from
-//! other strings, unless it is a `&'static str` (see below). It is not possible
-//! to move out of borrowed strings because they are owned elsewhere.
-//!
-//! # Examples
-//!
-//! Here's some code that uses a `&str`:
-//!
-//! ```
-//! let s = "Hello, world.";
-//! ```
-//!
-//! This `&str` is a `&'static str`, which is the type of string literals.
-//! They're `'static` because literals are available for the entire lifetime of
-//! the program.
-//!
-//! You can get a non-`'static` `&str` by taking a slice of a `String`:
-//!
-//! ```
-//! let some_string = "Hello, world.".to_string();
-//! let s = &some_string;
-//! ```
-//!
-//! # Representation
-//!
-//! Rust's string type, `str`, is a sequence of Unicode scalar values encoded as
-//! a stream of UTF-8 bytes. All [strings](../../reference.html#literals) are
-//! guaranteed to be validly encoded UTF-8 sequences. Additionally, strings are
-//! not null-terminated and can thus contain null bytes.
-//!
-//! The actual representation of `str`s have direct mappings to slices: `&str`
-//! is the same as `&[u8]`.
+//! *[See also the `str` primitive type](../primitive.str.html).*
 
-#![doc(primitive = "str")]
+
 #![stable(feature = "rust1", since = "1.0.0")]
 
 // Many of the usings in this module are only used in the test configuration.
@@ -457,6 +425,7 @@ impl str {
                  since = "1.0.0")]
     #[unstable(feature = "unicode",
                reason = "this functionality may only be provided by libunicode")]
+    #[inline]
     pub fn width(&self, is_cjk: bool) -> usize {
         UnicodeStr::width(self, is_cjk)
     }
@@ -473,7 +442,8 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(str_char)]
+    /// #![feature(str_char)]
+    ///
     /// let s = "Löwe 老虎 Léopard";
     /// assert!(s.is_char_boundary(0));
     /// // start of `老`
@@ -491,6 +461,7 @@ impl str {
                          with the existence of the char_indices iterator or \
                          this method may want to be replaced with checked \
                          slicing")]
+    #[inline]
     pub fn is_char_boundary(&self, index: usize) -> bool {
         core_str::StrExt::is_char_boundary(self, index)
     }
@@ -532,7 +503,7 @@ impl str {
     ///
     /// # Unsafety
     ///
-    /// Caller must check both UTF-8 character boundaries and the boundaries
+    /// Caller must check both UTF-8 sequence boundaries and the boundaries
     /// of the entire slice as
     /// well.
     ///
@@ -546,6 +517,7 @@ impl str {
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[inline]
     pub unsafe fn slice_unchecked(&self, begin: usize, end: usize) -> &str {
         core_str::StrExt::slice_unchecked(self, begin, end)
     }
@@ -554,19 +526,21 @@ impl str {
     ///
     /// Same as `slice_unchecked`, but works with `&mut str` instead of `&str`.
     #[unstable(feature = "str_slice_mut", reason = "recently added")]
+    #[inline]
     pub unsafe fn slice_mut_unchecked(&mut self, begin: usize, end: usize) -> &mut str {
         core_str::StrExt::slice_mut_unchecked(self, begin, end)
     }
 
-    /// Returns a slice of the string from the character range [`begin`..`end`).
+    /// Returns a slice of the string from the range [`begin`..`end`) where indices
+    /// are counted in code points.
     ///
     /// That is, start at the `begin`-th code point of the string and continue
     /// to the `end`-th code point. This does not detect or handle edge cases
-    /// such as leaving a combining character as the first code point of the
+    /// such as leaving a combining character as the first `char` of the
     /// string.
     ///
     /// Due to the design of UTF-8, this operation is `O(end)`. Use slicing
-    /// syntax if you want to use byte indices rather than codepoint indices.
+    /// syntax if you want to use `O(1)` byte indices instead.
     ///
     /// # Panics
     ///
@@ -576,7 +550,8 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(slice_chars)]
+    /// #![feature(slice_chars)]
+    ///
     /// let s = "Löwe 老虎 Léopard";
     ///
     /// assert_eq!(s.slice_chars(0, 4), "Löwe");
@@ -584,30 +559,35 @@ impl str {
     /// ```
     #[unstable(feature = "slice_chars",
                reason = "may have yet to prove its worth")]
+    #[deprecated(since = "1.3.0",
+                 reason = "can be implemented with char_indices and \
+                           hasn't seen enough use to justify inclusion")]
+    #[inline]
     pub fn slice_chars(&self, begin: usize, end: usize) -> &str {
         core_str::StrExt::slice_chars(self, begin, end)
     }
 
-    /// Given a byte position, return the next char and its index.
+    /// Given a byte position, return the next code point and its index.
     ///
-    /// This can be used to iterate over the Unicode characters of a string.
+    /// This can be used to iterate over the Unicode code points of a string.
     ///
     /// # Panics
     ///
     /// If `i` is greater than or equal to the length of the string.
-    /// If `i` is not the index of the beginning of a valid UTF-8 character.
+    /// If `i` is not the index of the beginning of a valid UTF-8 sequence.
     ///
     /// # Examples
     ///
-    /// This example manually iterates through the characters of a string;
+    /// This example manually iterates through the code points of a string;
     /// this should normally be
     /// done by `.chars()` or `.char_indices()`.
     ///
     /// ```
-    /// # #![feature(str_char, core)]
+    /// #![feature(str_char, core)]
+    ///
     /// use std::str::CharRange;
     ///
-    /// let s = "中华Việt Nam";
+    /// let s = "中华Việt Nam";
     /// let mut i = 0;
     /// while i < s.len() {
     ///     let CharRange {ch, next} = s.char_range_at(i);
@@ -623,43 +603,50 @@ impl str {
     /// 3: 华
     /// 6: V
     /// 7: i
-    /// 8: ệ
-    /// 11: t
-    /// 12:
-    /// 13: N
-    /// 14: a
-    /// 15: m
+    /// 8: e
+    /// 9: ̣
+    /// 11: ̂
+    /// 13: t
+    /// 14:
+    /// 15: N
+    /// 16: a
+    /// 17: m
     /// ```
     #[unstable(feature = "str_char",
                reason = "often replaced by char_indices, this method may \
                          be removed in favor of just char_at() or eventually \
                          removed altogether")]
+    #[inline]
     pub fn char_range_at(&self, start: usize) -> CharRange {
         core_str::StrExt::char_range_at(self, start)
     }
 
     /// Given a byte position, return the previous `char` and its position.
     ///
-    /// This function can be used to iterate over a Unicode string in reverse.
+    /// This function can be used to iterate over a Unicode code points in reverse.
+    ///
+    /// Note that Unicode has many features, such as combining marks, ligatures,
+    /// and direction marks, that need to be taken into account to correctly reverse a string.
     ///
     /// Returns 0 for next index if called on start index 0.
     ///
     /// # Panics
     ///
     /// If `i` is greater than the length of the string.
-    /// If `i` is not an index following a valid UTF-8 character.
+    /// If `i` is not an index following a valid UTF-8 sequence.
     ///
     /// # Examples
     ///
-    /// This example manually iterates through the characters of a string;
+    /// This example manually iterates through the code points of a string;
     /// this should normally be
     /// done by `.chars().rev()` or `.char_indices()`.
     ///
     /// ```
-    /// # #![feature(str_char, core)]
+    /// #![feature(str_char, core)]
+    ///
     /// use std::str::CharRange;
     ///
-    /// let s = "中华Việt Nam";
+    /// let s = "中华Việt Nam";
     /// let mut i = s.len();
     /// while i > 0 {
     ///     let CharRange {ch, next} = s.char_range_at_reverse(i);
@@ -671,12 +658,14 @@ impl str {
     /// This outputs:
     ///
     /// ```text
-    /// 16: m
-    /// 15: a
-    /// 14: N
-    /// 13:
-    /// 12: t
-    /// 11: ệ
+    /// 18: m
+    /// 17: a
+    /// 16: N
+    /// 15:
+    /// 14: t
+    /// 13: ̂
+    /// 11: ̣
+    /// 9: e
     /// 8: i
     /// 7: V
     /// 6: 华
@@ -686,6 +675,7 @@ impl str {
                reason = "often replaced by char_indices, this method may \
                          be removed in favor of just char_at_reverse() or \
                          eventually removed altogether")]
+    #[inline]
     pub fn char_range_at_reverse(&self, start: usize) -> CharRange {
         core_str::StrExt::char_range_at_reverse(self, start)
     }
@@ -695,15 +685,17 @@ impl str {
     /// # Panics
     ///
     /// If `i` is greater than or equal to the length of the string.
-    /// If `i` is not the index of the beginning of a valid UTF-8 character.
+    /// If `i` is not the index of the beginning of a valid UTF-8 sequence.
     ///
     /// # Examples
     ///
     /// ```
-    /// # #![feature(str_char)]
+    /// #![feature(str_char)]
+    ///
     /// let s = "abπc";
     /// assert_eq!(s.char_at(1), 'b');
     /// assert_eq!(s.char_at(2), 'π');
+    /// assert_eq!(s.char_at(4), 'c');
     /// ```
     #[unstable(feature = "str_char",
                reason = "frequently replaced by the chars() iterator, this \
@@ -711,6 +703,7 @@ impl str {
                          future; it is normally replaced by chars/char_indices \
                          iterators or by getting the first char from a \
                          subslice")]
+    #[inline]
     pub fn char_at(&self, i: usize) -> char {
         core_str::StrExt::char_at(self, i)
     }
@@ -721,51 +714,58 @@ impl str {
     /// # Panics
     ///
     /// If `i` is greater than the length of the string.
-    /// If `i` is not an index following a valid UTF-8 character.
+    /// If `i` is not an index following a valid UTF-8 sequence.
     ///
     /// # Examples
     ///
     /// ```
-    /// # #![feature(str_char)]
+    /// #![feature(str_char)]
+    ///
     /// let s = "abπc";
     /// assert_eq!(s.char_at_reverse(1), 'a');
     /// assert_eq!(s.char_at_reverse(2), 'b');
+    /// assert_eq!(s.char_at_reverse(3), 'π');
     /// ```
     #[unstable(feature = "str_char",
                reason = "see char_at for more details, but reverse semantics \
                          are also somewhat unclear, especially with which \
                          cases generate panics")]
+    #[inline]
     pub fn char_at_reverse(&self, i: usize) -> char {
         core_str::StrExt::char_at_reverse(self, i)
     }
 
-    /// Retrieves the first character from a `&str` and returns it.
+    /// Retrieves the first code point from a `&str` and returns it.
+    ///
+    /// Note that a single Unicode character (grapheme cluster)
+    /// can be composed of multiple `char`s.
     ///
     /// This does not allocate a new string; instead, it returns a slice that
-    /// points one character
-    /// beyond the character that was shifted.
+    /// points one code point beyond the code point that was shifted.
     ///
-    /// If the slice does not contain any characters, None is returned instead.
+    /// `None` is returned if the slice is empty.
     ///
     /// # Examples
     ///
     /// ```
-    /// # #![feature(str_char)]
-    /// let s = "Löwe 老虎 Léopard";
+    /// #![feature(str_char)]
+    ///
+    /// let s = "Łódź"; // \u{141}o\u{301}dz\u{301}
     /// let (c, s1) = s.slice_shift_char().unwrap();
     ///
-    /// assert_eq!(c, 'L');
-    /// assert_eq!(s1, "öwe 老虎 Léopard");
+    /// assert_eq!(c, 'Ł');
+    /// assert_eq!(s1, "ódź");
     ///
     /// let (c, s2) = s1.slice_shift_char().unwrap();
     ///
-    /// assert_eq!(c, 'ö');
-    /// assert_eq!(s2, "we 老虎 Léopard");
+    /// assert_eq!(c, 'o');
+    /// assert_eq!(s2, "\u{301}dz\u{301}");
     /// ```
     #[unstable(feature = "str_char",
                reason = "awaiting conventions about shifting and slices and \
                          may not be warranted with the existence of the chars \
                          and/or char_indices iterators")]
+    #[inline]
     pub fn slice_shift_char(&self) -> Option<(char, &str)> {
         core_str::StrExt::slice_shift_char(self)
     }
@@ -773,18 +773,19 @@ impl str {
     /// Divide one string slice into two at an index.
     ///
     /// The index `mid` is a byte offset from the start of the string
-    /// that must be on a character boundary.
+    /// that must be on a `char` boundary.
     ///
     /// Return slices `&self[..mid]` and `&self[mid..]`.
     ///
     /// # Panics
     ///
-    /// Panics if `mid` is beyond the last character of the string,
-    /// or if it is not on a character boundary.
+    /// Panics if `mid` is beyond the last code point of the string,
+    /// or if it is not on a `char` boundary.
     ///
     /// # Examples
     /// ```
-    /// # #![feature(str_split_at)]
+    /// #![feature(str_split_at)]
+    ///
     /// let s = "Löwe 老虎 Léopard";
     /// let first_space = s.find(' ').unwrap_or(s.len());
     /// let (a, b) = s.split_at(first_space);
@@ -805,31 +806,45 @@ impl str {
         core_str::StrExt::split_at_mut(self, mid)
     }
 
-    /// An iterator over the codepoints of `self`.
+    /// An iterator over the code points of `self`.
+    ///
+    /// In Unicode relationship between code points and characters is complex.
+    /// A single character may be composed of multiple code points
+    /// (e.g. diacritical marks added to a letter), and a single code point
+    /// (e.g. Hangul syllable) may contain multiple characters.
+    ///
+    /// For iteration over human-readable characters a grapheme cluster iterator
+    /// may be more appropriate. See the [unicode-segmentation crate][1].
+    ///
+    /// [1]: https://crates.io/crates/unicode-segmentation
     ///
     /// # Examples
     ///
     /// ```
-    /// let v: Vec<char> = "abc åäö".chars().collect();
+    /// let v: Vec<char> = "ASCII żółć 🇨🇭 한".chars().collect();
     ///
-    /// assert_eq!(v, ['a', 'b', 'c', ' ', 'å', 'ä', 'ö']);
+    /// assert_eq!(v, ['A', 'S', 'C', 'I', 'I', ' ',
+    ///     'z', '\u{307}', 'o', '\u{301}', 'ł', 'c', '\u{301}', ' ',
+    ///     '\u{1f1e8}', '\u{1f1ed}', ' ', '한']);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[inline]
     pub fn chars(&self) -> Chars {
         core_str::StrExt::chars(self)
     }
 
-    /// An iterator over the characters of `self` and their byte offsets.
+    /// An iterator over the `char`s of `self` and their byte offsets.
     ///
     /// # Examples
     ///
     /// ```
-    /// let v: Vec<(usize, char)> = "abc".char_indices().collect();
-    /// let b = vec![(0, 'a'), (1, 'b'), (2, 'c')];
+    /// let v: Vec<(usize, char)> = "A🇨🇭".char_indices().collect();
+    /// let b = vec![(0, 'A'), (1, '\u{1f1e8}'), (5, '\u{1f1ed}')];
     ///
     /// assert_eq!(v, b);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[inline]
     pub fn char_indices(&self) -> CharIndices {
         core_str::StrExt::char_indices(self)
     }
@@ -844,6 +859,7 @@ impl str {
     /// assert_eq!(v, b"bors".to_vec());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[inline]
     pub fn bytes(&self) -> Bytes {
         core_str::StrExt::bytes(self)
     }
@@ -854,12 +870,13 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// let some_words = " Mary   had\ta little  \n\t lamb";
+    /// let some_words = " Mary   had\ta\u{2009}little  \n\t lamb";
     /// let v: Vec<&str> = some_words.split_whitespace().collect();
     ///
     /// assert_eq!(v, ["Mary", "had", "a", "little", "lamb"]);
     /// ```
     #[stable(feature = "split_whitespace", since = "1.1.0")]
+    #[inline]
     pub fn split_whitespace(&self) -> SplitWhitespace {
         UnicodeStr::split_whitespace(self)
     }
@@ -870,9 +887,10 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(str_words)]
-    /// # #![allow(deprecated)]
-    /// let some_words = " Mary   had\ta little  \n\t lamb";
+    /// #![feature(str_words)]
+    /// #![allow(deprecated)]
+    ///
+    /// let some_words = " Mary   had\ta\u{2009}little  \n\t lamb";
     /// let v: Vec<&str> = some_words.words().collect();
     ///
     /// assert_eq!(v, ["Mary", "had", "a", "little", "lamb"]);
@@ -882,6 +900,7 @@ impl str {
     #[unstable(feature = "str_words",
                reason = "the precise algorithm to use is unclear")]
     #[allow(deprecated)]
+    #[inline]
     pub fn words(&self) -> Words {
         UnicodeStr::words(self)
     }
@@ -908,6 +927,7 @@ impl str {
     /// assert_eq!(v, ["foo", "bar", "", "baz"]);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[inline]
     pub fn lines(&self) -> Lines {
         core_str::StrExt::lines(self)
     }
@@ -935,6 +955,7 @@ impl str {
     /// assert_eq!(v, ["foo", "bar", "", "baz"]);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[inline]
     pub fn lines_any(&self) -> LinesAny {
         core_str::StrExt::lines_any(self)
     }
@@ -1026,7 +1047,8 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(unicode, core)]
+    /// #![feature(unicode, core)]
+    ///
     /// let gr1 = "a\u{310}e\u{301}o\u{308}\u{332}".graphemes(true).collect::<Vec<&str>>();
     /// let b: &[_] = &["a\u{310}", "e\u{301}", "o\u{308}\u{332}"];
     ///
@@ -1052,7 +1074,8 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(unicode, core)]
+    /// #![feature(unicode, core)]
+    ///
     /// let gr_inds = "a̐éö̲\r\n".grapheme_indices(true).collect::<Vec<(usize, &str)>>();
     /// let b: &[_] = &[(0, "a̐"), (3, "é"), (6, "ö̲"), (11, "\r\n")];
     ///
@@ -1590,7 +1613,8 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(str_match_indices)]
+    /// #![feature(str_match_indices)]
+    ///
     /// let v: Vec<(usize, usize)> = "abcXXXabcYYYabc".match_indices("abc").collect();
     /// assert_eq!(v, [(0, 3), (6, 9), (12, 15)]);
     ///
@@ -1634,7 +1658,8 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(str_match_indices)]
+    /// #![feature(str_match_indices)]
+    ///
     /// let v: Vec<(usize, usize)> = "abcXXXabcYYYabc".rmatch_indices("abc").collect();
     /// assert_eq!(v, [(12, 15), (6, 9), (0, 3)]);
     ///
@@ -1664,7 +1689,8 @@ impl str {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(subslice_offset)]
+    /// #![feature(subslice_offset)]
+    ///
     /// let string = "a\nb\nc";
     /// let lines: Vec<&str> = string.lines().collect();
     ///
@@ -1674,6 +1700,8 @@ impl str {
     /// ```
     #[unstable(feature = "subslice_offset",
                reason = "awaiting convention about comparability of arbitrary slices")]
+    #[deprecated(since = "1.3.0",
+                 reason = "replaced with other pattern-related methods")]
     pub fn subslice_offset(&self, inner: &str) -> usize {
         core_str::StrExt::subslice_offset(self, inner)
     }

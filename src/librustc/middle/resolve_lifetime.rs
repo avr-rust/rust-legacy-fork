@@ -28,7 +28,6 @@ use std::mem::replace;
 use syntax::ast;
 use syntax::codemap::Span;
 use syntax::parse::token::special_idents;
-use syntax::parse::token;
 use syntax::print::pprust::lifetime_to_string;
 use syntax::visit;
 use syntax::visit::Visitor;
@@ -109,7 +108,7 @@ pub fn krate(sess: &Session, krate: &ast::Crate, def_map: &DefMap) -> NamedRegio
 
 impl<'a, 'v> Visitor<'v> for LifetimeContext<'a> {
     fn visit_item(&mut self, item: &ast::Item) {
-        // Items save/restore the set of labels. This way innner items
+        // Items save/restore the set of labels. This way inner items
         // can freely reuse names, be they loop labels or lifetimes.
         let saved = replace(&mut self.labels_in_fn, vec![]);
 
@@ -143,6 +142,29 @@ impl<'a, 'v> Visitor<'v> for LifetimeContext<'a> {
                         this.check_lifetime_defs(old_scope, lifetimes);
                         visit::walk_item(this, item);
                     });
+                }
+            }
+        });
+
+        // Done traversing the item; restore saved set of labels.
+        replace(&mut self.labels_in_fn, saved);
+    }
+
+    fn visit_foreign_item(&mut self, item: &ast::ForeignItem) {
+        // Items save/restore the set of labels. This way inner items
+        // can freely reuse names, be they loop labels or lifetimes.
+        let saved = replace(&mut self.labels_in_fn, vec![]);
+
+        // Items always introduce a new root scope
+        self.with(RootScope, |_, this| {
+            match item.node {
+                ast::ForeignItemFn(_, ref generics) => {
+                    this.visit_early_late(subst::FnSpace, generics, |this| {
+                        visit::walk_foreign_item(this, item);
+                    })
+                }
+                ast::ForeignItemStatic(..) => {
+                    visit::walk_foreign_item(this, item);
                 }
             }
         });
@@ -372,6 +394,12 @@ fn extract_labels<'v, 'a>(ctxt: &mut LifetimeContext<'a>, b: &'v ast::Block) {
 
     impl<'v, 'a> Visitor<'v> for GatherLabels<'a> {
         fn visit_expr(&mut self, ex: &'v ast::Expr) {
+            // do not recurse into closures defined in the block
+            // since they are treated as separate fns from the POV of
+            // labels_in_fn
+            if let ast::ExprClosure(..) = ex.node {
+                return
+            }
             if let Some(label) = expression_label(ex) {
                 for &(prior, prior_span) in &self.labels_in_fn[..] {
                     // FIXME (#24278): non-hygienic comparison
@@ -635,7 +663,7 @@ impl<'a> LifetimeContext<'a> {
     fn unresolved_lifetime_ref(&self, lifetime_ref: &ast::Lifetime) {
         span_err!(self.sess, lifetime_ref.span, E0261,
             "use of undeclared lifetime name `{}`",
-                    token::get_name(lifetime_ref.name));
+                    lifetime_ref.name);
     }
 
     fn check_lifetime_defs(&mut self, old_scope: Scope, lifetimes: &Vec<ast::LifetimeDef>) {
@@ -646,8 +674,7 @@ impl<'a> LifetimeContext<'a> {
             for lifetime in lifetimes {
                 if special_idents.iter().any(|&i| i.name == lifetime.lifetime.name) {
                     span_err!(self.sess, lifetime.lifetime.span, E0262,
-                        "illegal lifetime parameter name: `{}`",
-                                token::get_name(lifetime.lifetime.name));
+                        "invalid lifetime parameter name: `{}`", lifetime.lifetime.name);
                 }
             }
 
@@ -659,7 +686,7 @@ impl<'a> LifetimeContext<'a> {
                     span_err!(self.sess, lifetime_j.lifetime.span, E0263,
                         "lifetime name `{}` declared twice in \
                                 the same scope",
-                                token::get_name(lifetime_j.lifetime.name));
+                                lifetime_j.lifetime.name);
                 }
             }
 

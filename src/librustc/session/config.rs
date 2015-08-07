@@ -84,6 +84,7 @@ pub struct Options {
     pub debug_assertions: bool,
     pub debuginfo: DebugInfoLevel,
     pub lint_opts: Vec<(String, lint::Level)>,
+    pub lint_cap: Option<lint::Level>,
     pub describe_lints: bool,
     pub output_types: Vec<OutputType>,
     // This was mutable for rustpkg, which updates search paths based on the
@@ -203,6 +204,7 @@ pub fn basic_options() -> Options {
         optimize: No,
         debuginfo: NoDebugInfo,
         lint_opts: Vec::new(),
+        lint_cap: None,
         describe_lints: false,
         output_types: Vec::new(),
         search_paths: SearchPaths::new(),
@@ -594,6 +596,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
           "Force drop flag checks on or off"),
     trace_macros: bool = (false, parse_bool,
           "For every macro invocation, print its name and arguments"),
+    enable_nonzeroing_move_hints: bool = (false, parse_bool,
+          "Force nonzeroing move optimization on"),
 }
 
 pub fn default_lib_output() -> CrateType {
@@ -793,6 +797,9 @@ pub fn rustc_short_optgroups() -> Vec<RustcOptGroup> {
         opt::multi("A", "allow", "Set lint allowed", "OPT"),
         opt::multi("D", "deny", "Set lint denied", "OPT"),
         opt::multi("F", "forbid", "Set lint forbidden", "OPT"),
+        opt::multi("", "cap-lints", "Set the most restrictive lint level. \
+                                     More restrictive lints are capped at this \
+                                     level", "LEVEL"),
         opt::multi("C", "codegen", "Set a codegen option", "OPT[=VALUE]"),
         opt::flag("V", "version", "Print version info and exit"),
         opt::flag("v", "verbose", "Use verbose output"),
@@ -822,8 +829,8 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
                    `typed` (crates expanded, with type annotations), or
                    `expanded,identified` (fully parenthesized, AST nodes with IDs).",
                  "TYPE"),
-        opt::flagopt_u("", "xpretty",
-                     "Pretty-print the input instead of compiling, unstable variants;
+        opt::flagopt_u("", "unpretty",
+                     "Present the input source, unstable (and less-pretty) variants;
                       valid types are any of the types for `--pretty`, as well as:
                       `flowgraph=<nodeid>` (graphviz formatted flowgraph for node), or
                       `everybody_loops` (all function bodies replaced with `loop {}`).",
@@ -860,6 +867,12 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
             }
         }
     }
+
+    let lint_cap = matches.opt_str("cap-lints").map(|cap| {
+        lint::Level::from_str(&cap).unwrap_or_else(|| {
+            early_error(&format!("unknown lint level: `{}`", cap))
+        })
+    });
 
     let debugging_opts = build_debugging_options(matches);
 
@@ -1024,6 +1037,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         optimize: opt_level,
         debuginfo: debuginfo,
         lint_opts: lint_opts,
+        lint_cap: lint_cap,
         describe_lints: describe_lints,
         output_types: output_types,
         search_paths: search_paths,

@@ -25,6 +25,7 @@ use middle::lang_items::LangItem;
 use middle::subst::{self, Substs};
 use trans::base;
 use trans::build;
+use trans::callee;
 use trans::cleanup;
 use trans::consts;
 use trans::datum;
@@ -48,6 +49,7 @@ use std::cell::{Cell, RefCell};
 use std::result::Result as StdResult;
 use std::vec::Vec;
 use syntax::ast;
+use syntax::ast_util::local_def;
 use syntax::codemap::{DUMMY_SP, Span};
 use syntax::parse::token::InternedString;
 use syntax::parse::token;
@@ -172,12 +174,10 @@ fn type_needs_drop_given_env<'a,'tcx>(cx: &ty::ctxt<'tcx>,
 
 fn type_is_newtype_immediate<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, ty: Ty<'tcx>) -> bool {
     match ty.sty {
-        ty::TyStruct(def_id, substs) => {
-            let fields = ccx.tcx().lookup_struct_fields(def_id);
+        ty::TyStruct(def, substs) => {
+            let fields = &def.struct_variant().fields;
             fields.len() == 1 && {
-                let ty = ccx.tcx().lookup_field_type(def_id, fields[0].id, substs);
-                let ty = monomorphize::normalize_associated_type(ccx.tcx(), &ty);
-                type_is_immediate(ccx, ty)
+                type_is_immediate(ccx, monomorphize::field_ty(ccx.tcx(), substs, &fields[0]))
             }
         }
         _ => false
@@ -192,7 +192,7 @@ pub fn type_is_immediate<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, ty: Ty<'tcx>) -
     let simple = ty.is_scalar() ||
         ty.is_unique() || ty.is_region_ptr() ||
         type_is_newtype_immediate(ccx, ty) ||
-        ty.is_simd(tcx);
+        ty.is_simd();
     if simple && !type_is_fat_ptr(tcx, ty) {
         return true;
     }
@@ -270,6 +270,67 @@ pub fn expr_info(expr: &ast::Expr) -> NodeIdAndSpan {
     NodeIdAndSpan { id: expr.id, span: expr.span }
 }
 
+/// The concrete version of ty::FieldDef. The name is the field index if
+/// the field is numeric.
+pub struct Field<'tcx>(pub ast::Name, pub Ty<'tcx>);
+
+/// The concrete version of ty::VariantDef
+pub struct VariantInfo<'tcx> {
+    pub discr: ty::Disr,
+    pub fields: Vec<Field<'tcx>>
+}
+
+impl<'tcx> VariantInfo<'tcx> {
+    pub fn from_ty(tcx: &ty::ctxt<'tcx>,
+                   ty: Ty<'tcx>,
+                   opt_def: Option<def::Def>)
+                   -> Self
+    {
+        match ty.sty {
+            ty::TyStruct(adt, substs) | ty::TyEnum(adt, substs) => {
+                let variant = match opt_def {
+                    None => adt.struct_variant(),
+                    Some(def) => adt.variant_of_def(def)
+                };
+
+                VariantInfo {
+                    discr: variant.disr_val,
+                    fields: variant.fields.iter().map(|f| {
+                        Field(f.name, monomorphize::field_ty(tcx, substs, f))
+                    }).collect()
+                }
+            }
+
+            ty::TyTuple(ref v) => {
+                VariantInfo {
+                    discr: 0,
+                    fields: v.iter().enumerate().map(|(i, &t)| {
+                        Field(token::intern(&i.to_string()), t)
+                    }).collect()
+                }
+            }
+
+            _ => {
+                tcx.sess.bug(&format!(
+                    "cannot get field types from the type {:?}",
+                    ty));
+            }
+        }
+    }
+
+    /// Return the variant corresponding to a given node (e.g. expr)
+    pub fn of_node(tcx: &ty::ctxt<'tcx>, ty: Ty<'tcx>, id: ast::NodeId) -> Self {
+        let node_def = tcx.def_map.borrow().get(&id).map(|v| v.full_def());
+        Self::from_ty(tcx, ty, node_def)
+    }
+
+    pub fn field_index(&self, name: ast::Name) -> usize {
+        self.fields.iter().position(|&Field(n,_)| n == name).unwrap_or_else(|| {
+            panic!("unknown field `{}`", name)
+        })
+    }
+}
+
 pub struct BuilderRef_res {
     pub b: BuilderRef,
 }
@@ -297,6 +358,33 @@ pub fn validate_substs(substs: &Substs) {
 // work around bizarre resolve errors
 type RvalueDatum<'tcx> = datum::Datum<'tcx, datum::Rvalue>;
 pub type LvalueDatum<'tcx> = datum::Datum<'tcx, datum::Lvalue>;
+
+#[derive(Clone, Debug)]
+struct HintEntry<'tcx> {
+    // The datum for the dropflag-hint itself; note that many
+    // source-level Lvalues will be associated with the same
+    // dropflag-hint datum.
+    datum: cleanup::DropHintDatum<'tcx>,
+}
+
+pub struct DropFlagHintsMap<'tcx> {
+    // Maps NodeId for expressions that read/write unfragmented state
+    // to that state's drop-flag "hint."  (A stack-local hint
+    // indicates either that (1.) it is certain that no-drop is
+    // needed, or (2.)  inline drop-flag must be consulted.)
+    node_map: NodeMap<HintEntry<'tcx>>,
+}
+
+impl<'tcx> DropFlagHintsMap<'tcx> {
+    pub fn new() -> DropFlagHintsMap<'tcx> { DropFlagHintsMap { node_map: NodeMap() } }
+    pub fn has_hint(&self, id: ast::NodeId) -> bool { self.node_map.contains_key(&id) }
+    pub fn insert(&mut self, id: ast::NodeId, datum: cleanup::DropHintDatum<'tcx>) {
+        self.node_map.insert(id, HintEntry { datum: datum });
+    }
+    pub fn hint_datum(&self, id: ast::NodeId) -> Option<cleanup::DropHintDatum<'tcx>> {
+        self.node_map.get(&id).map(|t|t.datum)
+    }
+}
 
 // Function context.  Every LLVM function we create will have one of
 // these.
@@ -347,6 +435,10 @@ pub struct FunctionContext<'a, 'tcx: 'a> {
 
     // Same as above, but for closure upvars
     pub llupvars: RefCell<NodeMap<ValueRef>>,
+
+    // Carries info about drop-flags for local bindings (longer term,
+    // paths) for the code being compiled.
+    pub lldropflag_hints: RefCell<DropFlagHintsMap<'tcx>>,
 
     // The NodeId of the function, or -1 if it doesn't correspond to
     // a user-defined function.
@@ -479,6 +571,105 @@ impl<'a, 'tcx> FunctionContext<'a, 'tcx> {
     pub fn type_needs_drop(&self, ty: Ty<'tcx>) -> bool {
         type_needs_drop_given_env(self.ccx.tcx(), ty, &self.param_env)
     }
+
+    pub fn eh_personality(&self) -> ValueRef {
+        // The exception handling personality function.
+        //
+        // If our compilation unit has the `eh_personality` lang item somewhere
+        // within it, then we just need to translate that. Otherwise, we're
+        // building an rlib which will depend on some upstream implementation of
+        // this function, so we just codegen a generic reference to it. We don't
+        // specify any of the types for the function, we just make it a symbol
+        // that LLVM can later use.
+        //
+        // Note that MSVC is a little special here in that we don't use the
+        // `eh_personality` lang item at all. Currently LLVM has support for
+        // both Dwarf and SEH unwind mechanisms for MSVC targets and uses the
+        // *name of the personality function* to decide what kind of unwind side
+        // tables/landing pads to emit. It looks like Dwarf is used by default,
+        // injecting a dependency on the `_Unwind_Resume` symbol for resuming
+        // an "exception", but for MSVC we want to force SEH. This means that we
+        // can't actually have the personality function be our standard
+        // `rust_eh_personality` function, but rather we wired it up to the
+        // CRT's custom personality function, which forces LLVM to consider
+        // landing pads as "landing pads for SEH".
+        let target = &self.ccx.sess().target.target;
+        match self.ccx.tcx().lang_items.eh_personality() {
+            Some(def_id) if !target.options.is_like_msvc => {
+                callee::trans_fn_ref(self.ccx, def_id, ExprId(0),
+                                     self.param_substs).val
+            }
+            _ => {
+                let mut personality = self.ccx.eh_personality().borrow_mut();
+                match *personality {
+                    Some(llpersonality) => llpersonality,
+                    None => {
+                        let name = if !target.options.is_like_msvc {
+                            "rust_eh_personality"
+                        } else if target.arch == "x86" {
+                            "_except_handler3"
+                        } else {
+                            "__C_specific_handler"
+                        };
+                        let fty = Type::variadic_func(&[], &Type::i32(self.ccx));
+                        let f = declare::declare_cfn(self.ccx, name, fty,
+                                                     self.ccx.tcx().types.i32);
+                        *personality = Some(f);
+                        f
+                    }
+                }
+            }
+        }
+    }
+
+    /// By default, LLVM lowers `resume` instructions into calls to `_Unwind_Resume`
+    /// defined in libgcc, however, unlike personality routines, there is no easy way to
+    /// override that symbol.  This method injects a local-scoped `_Unwind_Resume` function
+    /// which immediately defers to the user-defined `eh_unwind_resume` lang item.
+    pub fn inject_unwind_resume_hook(&self) {
+        let ccx = self.ccx;
+        if !ccx.sess().target.target.options.custom_unwind_resume ||
+           ccx.unwind_resume_hooked().get() {
+            return;
+        }
+
+        let new_resume = match ccx.tcx().lang_items.eh_unwind_resume() {
+            Some(did) => callee::trans_fn_ref(ccx, did, ExprId(0), &self.param_substs).val,
+            None => {
+                let fty = Type::variadic_func(&[], &Type::void(self.ccx));
+                declare::declare_cfn(self.ccx, "rust_eh_unwind_resume", fty,
+                                     self.ccx.tcx().mk_nil())
+            }
+        };
+
+        unsafe {
+            let resume_type = Type::func(&[Type::i8(ccx).ptr_to()], &Type::void(ccx));
+            let old_resume = llvm::LLVMAddFunction(ccx.llmod(),
+                                                   "_Unwind_Resume\0".as_ptr() as *const _,
+                                                   resume_type.to_ref());
+            llvm::SetLinkage(old_resume, llvm::InternalLinkage);
+            let llbb = llvm::LLVMAppendBasicBlockInContext(ccx.llcx(),
+                                                           old_resume,
+                                                           "\0".as_ptr() as *const _);
+            let builder = ccx.builder();
+            builder.position_at_end(llbb);
+            builder.call(new_resume, &[llvm::LLVMGetFirstParam(old_resume)], None);
+            builder.unreachable(); // it should never return
+
+            // Until DwarfEHPrepare pass has run, _Unwind_Resume is not referenced by any live code
+            // and is subject to dead code elimination.  Here we add _Unwind_Resume to @llvm.globals
+            // to prevent that.
+            let i8p_ty = Type::i8p(ccx);
+            let used_ty = Type::array(&i8p_ty, 1);
+            let used = llvm::LLVMAddGlobal(ccx.llmod(), used_ty.to_ref(),
+                                           "llvm.used\0".as_ptr() as *const _);
+            let old_resume = llvm::LLVMConstBitCast(old_resume, i8p_ty.to_ref());
+            llvm::LLVMSetInitializer(used, C_array(i8p_ty, &[old_resume]));
+            llvm::SetLinkage(used, llvm::AppendingLinkage);
+            llvm::LLVMSetSection(used, "llvm.metadata\0".as_ptr() as *const _)
+        }
+        ccx.unwind_resume_hooked().set(true);
+    }
 }
 
 // Basic block context.  We create a block context for each basic block
@@ -535,7 +726,7 @@ impl<'blk, 'tcx> BlockS<'blk, 'tcx> {
     pub fn sess(&self) -> &'blk Session { self.fcx.ccx.sess() }
 
     pub fn name(&self, name: ast::Name) -> String {
-        token::get_name(name).to_string()
+        name.to_string()
     }
 
     pub fn node_id_to_string(&self, id: ast::NodeId) -> String {
@@ -676,7 +867,7 @@ impl AsU64 for u64  { fn as_u64(self) -> u64 { self as u64 }}
 impl AsU64 for u32  { fn as_u64(self) -> u64 { self as u64 }}
 impl AsU64 for usize { fn as_u64(self) -> u64 { self as u64 }}
 
-pub fn C_u8(ccx: &CrateContext, i: usize) -> ValueRef {
+pub fn C_u8(ccx: &CrateContext, i: u8) -> ValueRef {
     C_integral(Type::i8(ccx), i as u64, false)
 }
 
@@ -905,11 +1096,13 @@ pub fn fulfill_obligation<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
     let vtable = selection.map(|predicate| {
         fulfill_cx.register_predicate_obligation(&infcx, predicate);
     });
-    let vtable = drain_fulfillment_cx_or_panic(span, &infcx, &mut fulfill_cx, &vtable);
+    let vtable = erase_regions(tcx,
+        &drain_fulfillment_cx_or_panic(span, &infcx, &mut fulfill_cx, &vtable)
+    );
 
-    info!("Cache miss: {:?}", trait_ref);
-    ccx.trait_cache().borrow_mut().insert(trait_ref,
-                                          vtable.clone());
+    info!("Cache miss: {:?} => {:?}", trait_ref, vtable);
+
+    ccx.trait_cache().borrow_mut().insert(trait_ref, vtable.clone());
 
     vtable
 }
@@ -1044,4 +1237,27 @@ pub fn langcall(bcx: Block,
             }
         }
     }
+}
+
+/// Return the VariantDef corresponding to an inlined variant node
+pub fn inlined_variant_def<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
+                                     inlined_vid: ast::NodeId)
+                                     -> ty::VariantDef<'tcx>
+{
+
+    let ctor_ty = ccx.tcx().node_id_to_type(inlined_vid);
+    debug!("inlined_variant_def: ctor_ty={:?} inlined_vid={:?}", ctor_ty,
+           inlined_vid);
+    let adt_def = match ctor_ty.sty {
+        ty::TyBareFn(_, &ty::BareFnTy { sig: ty::Binder(ty::FnSig {
+            output: ty::FnConverging(ty), ..
+        }), ..}) => ty,
+        _ => ctor_ty
+    }.ty_adt_def().unwrap();
+    adt_def.variants.iter().find(|v| {
+        local_def(inlined_vid) == v.did ||
+            ccx.external().borrow().get(&v.did) == Some(&Some(inlined_vid))
+    }).unwrap_or_else(|| {
+        ccx.sess().bug(&format!("no variant for {:?}::{}", adt_def, inlined_vid))
+    })
 }

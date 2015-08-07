@@ -20,6 +20,9 @@ use mem;
 /// Extension methods for ASCII-subset only operations on owned strings
 #[unstable(feature = "owned_ascii_ext",
            reason = "would prefer to do this in a more general way")]
+#[deprecated(since = "1.3.0",
+             reason = "hasn't yet proved essential to be in the standard library")]
+#[allow(deprecated)]
 pub trait OwnedAsciiExt {
     /// Converts the string to ASCII upper case:
     /// ASCII letters 'a' to 'z' are mapped to 'A' to 'Z',
@@ -122,7 +125,8 @@ pub trait AsciiExt {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(ascii)]
+    /// #![feature(ascii)]
+    ///
     /// use std::ascii::AsciiExt;
     ///
     /// let mut ascii = 'a';
@@ -141,7 +145,8 @@ pub trait AsciiExt {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(ascii)]
+    /// #![feature(ascii)]
+    ///
     /// use std::ascii::AsciiExt;
     ///
     /// let mut ascii = 'A';
@@ -164,11 +169,13 @@ impl AsciiExt for str {
     }
 
     #[inline]
+    #[allow(deprecated)]
     fn to_ascii_uppercase(&self) -> String {
         self.to_string().into_ascii_uppercase()
     }
 
     #[inline]
+    #[allow(deprecated)]
     fn to_ascii_lowercase(&self) -> String {
         self.to_string().into_ascii_lowercase()
     }
@@ -189,6 +196,7 @@ impl AsciiExt for str {
     }
 }
 
+#[allow(deprecated)]
 impl OwnedAsciiExt for String {
     #[inline]
     fn into_ascii_uppercase(self) -> String {
@@ -212,11 +220,13 @@ impl AsciiExt for [u8] {
     }
 
     #[inline]
+    #[allow(deprecated)]
     fn to_ascii_uppercase(&self) -> Vec<u8> {
         self.to_vec().into_ascii_uppercase()
     }
 
     #[inline]
+    #[allow(deprecated)]
     fn to_ascii_lowercase(&self) -> Vec<u8> {
         self.to_vec().into_ascii_lowercase()
     }
@@ -242,6 +252,7 @@ impl AsciiExt for [u8] {
     }
 }
 
+#[allow(deprecated)]
 impl OwnedAsciiExt for Vec<u8> {
     #[inline]
     fn into_ascii_uppercase(mut self) -> Vec<u8> {

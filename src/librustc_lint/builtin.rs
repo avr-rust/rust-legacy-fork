@@ -32,16 +32,13 @@
 #![allow(deprecated)]
 
 use metadata::{csearch, decoder};
-use middle::def::*;
-use middle::infer;
+use middle::{cfg, def, infer, pat_util, stability, traits};
 use middle::subst::Substs;
 use middle::ty::{self, Ty};
-use middle::traits;
-use middle::{def, pat_util, stability};
 use middle::const_eval::{eval_const_expr_partial, ConstVal};
-use middle::cfg;
+use middle::const_eval::EvalHint::ExprTypeChecked;
 use rustc::ast_map;
-use util::nodemap::{FnvHashMap, NodeSet};
+use util::nodemap::{FnvHashMap, FnvHashSet, NodeSet};
 use lint::{Level, Context, LintPass, LintArray, Lint};
 
 use std::collections::{HashSet, BitSet};
@@ -54,7 +51,6 @@ use syntax::ast_util::{self, is_shift_binop, local_def};
 use syntax::attr::{self, AttrMetaMethods};
 use syntax::codemap::{self, Span};
 use syntax::feature_gate::{KNOWN_ATTRIBUTES, AttributeType};
-use syntax::parse::token;
 use syntax::ast::{TyIs, TyUs, TyI8, TyU8, TyI16, TyU16, TyI32, TyU32, TyI64, TyU64};
 use syntax::ptr::P;
 use syntax::visit::{self, Visitor};
@@ -86,12 +82,6 @@ impl LintPass for WhileTrue {
             }
         }
     }
-}
-
-declare_lint! {
-    UNSIGNED_NEGATION,
-    Warn,
-    "using an unary minus operator on unsigned type"
 }
 
 declare_lint! {
@@ -128,8 +118,7 @@ impl TypeLimits {
 
 impl LintPass for TypeLimits {
     fn get_lints(&self) -> LintArray {
-        lint_array!(UNSIGNED_NEGATION, UNUSED_COMPARISONS, OVERFLOWING_LITERALS,
-                    EXCEEDING_BITSHIFTS)
+        lint_array!(UNUSED_COMPARISONS, OVERFLOWING_LITERALS, EXCEEDING_BITSHIFTS)
     }
 
     fn check_expr(&mut self, cx: &Context, e: &ast::Expr) {
@@ -139,9 +128,12 @@ impl LintPass for TypeLimits {
                     ast::ExprLit(ref lit) => {
                         match lit.node {
                             ast::LitInt(_, ast::UnsignedIntLit(_)) => {
-                                cx.span_lint(UNSIGNED_NEGATION, e.span,
-                                             "negation of unsigned int literal may \
-                                             be unintentional");
+                                check_unsigned_negation_feature(cx, e.span);
+                            },
+                            ast::LitInt(_, ast::UnsuffixedIntLit(_)) => {
+                                if let ty::TyUint(_) = cx.tcx.expr_ty(e).sty {
+                                    check_unsigned_negation_feature(cx, e.span);
+                                }
                             },
                             _ => ()
                         }
@@ -150,9 +142,7 @@ impl LintPass for TypeLimits {
                         let t = cx.tcx.expr_ty(&**expr);
                         match t.sty {
                             ty::TyUint(_) => {
-                                cx.span_lint(UNSIGNED_NEGATION, e.span,
-                                             "negation of unsigned int variable may \
-                                             be unintentional");
+                                check_unsigned_negation_feature(cx, e.span);
                             },
                             _ => ()
                         }
@@ -184,7 +174,7 @@ impl LintPass for TypeLimits {
                             if let ast::LitInt(shift, _) = lit.node { shift >= bits }
                             else { false }
                         } else {
-                            match eval_const_expr_partial(cx.tcx, &**r, Some(cx.tcx.types.usize)) {
+                            match eval_const_expr_partial(cx.tcx, &**r, ExprTypeChecked) {
                                 Ok(ConstVal::Int(shift)) => { shift as u64 >= bits },
                                 Ok(ConstVal::Uint(shift)) => { shift >= bits },
                                 _ => { false }
@@ -385,6 +375,18 @@ impl LintPass for TypeLimits {
                 _ => false
             }
         }
+
+        fn check_unsigned_negation_feature(cx: &Context, span: Span) {
+            if !cx.sess().features.borrow().negate_unsigned {
+                // FIXME(#27141): change this to syntax::feature_gate::emit_feature_err…
+                cx.sess().span_warn(span,
+                    "unary negation of unsigned integers will be feature gated in the future");
+                // …and remove following two expressions.
+                if option_env!("CFG_DISABLE_UNSTABLE_FEATURES").is_some() { return; }
+                cx.sess().fileline_help(span, "add #![feature(negate_unsigned)] to the \
+                                               crate attributes to enable the gate in advance");
+            }
+        }
     }
 }
 
@@ -398,43 +400,296 @@ struct ImproperCTypesVisitor<'a, 'tcx: 'a> {
     cx: &'a Context<'a, 'tcx>
 }
 
-impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
-    fn check_def(&mut self, sp: Span, id: ast::NodeId) {
-        match self.cx.tcx.def_map.borrow().get(&id).unwrap().full_def() {
-            def::DefPrimTy(ast::TyInt(ast::TyIs)) => {
-                self.cx.span_lint(IMPROPER_CTYPES, sp,
-                                  "found rust type `isize` in foreign module, while \
-                                   libc::c_int or libc::c_long should be used");
-            }
-            def::DefPrimTy(ast::TyUint(ast::TyUs)) => {
-                self.cx.span_lint(IMPROPER_CTYPES, sp,
-                                  "found rust type `usize` in foreign module, while \
-                                   libc::c_uint or libc::c_ulong should be used");
-            }
-            def::DefTy(..) => {
-                let tty = match self.cx.tcx.ast_ty_to_ty_cache.borrow().get(&id) {
-                    Some(&t) => t,
-                    None => panic!("ast_ty_to_ty_cache was incomplete after typeck!")
-                };
+enum FfiResult {
+    FfiSafe,
+    FfiUnsafe(&'static str),
+    FfiBadStruct(ast::DefId, &'static str),
+    FfiBadEnum(ast::DefId, &'static str)
+}
 
-                if !tty.is_ffi_safe(self.cx.tcx) {
-                    self.cx.span_lint(IMPROPER_CTYPES, sp,
-                                      "found type without foreign-function-safe \
-                                       representation annotation in foreign module, consider \
-                                       adding a #[repr(...)] attribute to the type");
-                }
+/// Check if this enum can be safely exported based on the
+/// "nullable pointer optimization". Currently restricted
+/// to function pointers and references, but could be
+/// expanded to cover NonZero raw pointers and newtypes.
+/// FIXME: This duplicates code in trans.
+fn is_repr_nullable_ptr<'tcx>(tcx: &ty::ctxt<'tcx>,
+                              def: ty::AdtDef<'tcx>,
+                              substs: &Substs<'tcx>)
+                              -> bool {
+    if def.variants.len() == 2 {
+        let data_idx;
+
+        if def.variants[0].fields.is_empty() {
+            data_idx = 1;
+        } else if def.variants[1].fields.is_empty() {
+            data_idx = 0;
+        } else {
+            return false;
+        }
+
+        if def.variants[data_idx].fields.len() == 1 {
+            match def.variants[data_idx].fields[0].ty(tcx, substs).sty {
+                ty::TyBareFn(None, _) => { return true; }
+                ty::TyRef(..) => { return true; }
+                _ => { }
             }
-            _ => ()
+        }
+    }
+    false
+}
+
+fn ast_ty_to_normalized<'tcx>(tcx: &ty::ctxt<'tcx>,
+                              id: ast::NodeId)
+                              -> Ty<'tcx> {
+    let tty = match tcx.ast_ty_to_ty_cache.borrow().get(&id) {
+        Some(&t) => t,
+        None => panic!("ast_ty_to_ty_cache was incomplete after typeck!")
+    };
+    infer::normalize_associated_type(tcx, &tty)
+}
+
+impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
+    /// Check if the given type is "ffi-safe" (has a stable, well-defined
+    /// representation which can be exported to C code).
+    fn check_type_for_ffi(&self,
+                          cache: &mut FnvHashSet<Ty<'tcx>>,
+                          ty: Ty<'tcx>)
+                          -> FfiResult {
+        use self::FfiResult::*;
+        let cx = &self.cx.tcx;
+
+        // Protect against infinite recursion, for example
+        // `struct S(*mut S);`.
+        // FIXME: A recursion limit is necessary as well, for irregular
+        // recusive types.
+        if !cache.insert(ty) {
+            return FfiSafe;
+        }
+
+        match ty.sty {
+            ty::TyStruct(def, substs) => {
+                if !cx.lookup_repr_hints(def.did).contains(&attr::ReprExtern) {
+                    return FfiUnsafe(
+                        "found struct without foreign-function-safe \
+                         representation annotation in foreign module, \
+                         consider adding a #[repr(C)] attribute to \
+                         the type");
+                }
+
+                // We can't completely trust repr(C) markings; make sure the
+                // fields are actually safe.
+                if def.struct_variant().fields.is_empty() {
+                    return FfiUnsafe(
+                        "found zero-size struct in foreign module, consider \
+                         adding a member to this struct");
+                }
+
+                for field in &def.struct_variant().fields {
+                    let field_ty = infer::normalize_associated_type(cx, &field.ty(cx, substs));
+                    let r = self.check_type_for_ffi(cache, field_ty);
+                    match r {
+                        FfiSafe => {}
+                        FfiBadStruct(..) | FfiBadEnum(..) => { return r; }
+                        FfiUnsafe(s) => { return FfiBadStruct(def.did, s); }
+                    }
+                }
+                FfiSafe
+            }
+            ty::TyEnum(def, substs) => {
+                if def.variants.is_empty() {
+                    // Empty enums are okay... although sort of useless.
+                    return FfiSafe
+                }
+
+                // Check for a repr() attribute to specify the size of the
+                // discriminant.
+                let repr_hints = cx.lookup_repr_hints(def.did);
+                match &**repr_hints {
+                    [] => {
+                        // Special-case types like `Option<extern fn()>`.
+                        if !is_repr_nullable_ptr(cx, def, substs) {
+                            return FfiUnsafe(
+                                "found enum without foreign-function-safe \
+                                 representation annotation in foreign module, \
+                                 consider adding a #[repr(...)] attribute to \
+                                 the type")
+                        }
+                    }
+                    [ref hint] => {
+                        if !hint.is_ffi_safe() {
+                            // FIXME: This shouldn't be reachable: we should check
+                            // this earlier.
+                            return FfiUnsafe(
+                                "enum has unexpected #[repr(...)] attribute")
+                        }
+
+                        // Enum with an explicitly sized discriminant; either
+                        // a C-style enum or a discriminated union.
+
+                        // The layout of enum variants is implicitly repr(C).
+                        // FIXME: Is that correct?
+                    }
+                    _ => {
+                        // FIXME: This shouldn't be reachable: we should check
+                        // this earlier.
+                        return FfiUnsafe(
+                            "enum has too many #[repr(...)] attributes");
+                    }
+                }
+
+                // Check the contained variants.
+                for variant in &def.variants {
+                    for field in &variant.fields {
+                        let arg = infer::normalize_associated_type(cx, &field.ty(cx, substs));
+                        let r = self.check_type_for_ffi(cache, arg);
+                        match r {
+                            FfiSafe => {}
+                            FfiBadStruct(..) | FfiBadEnum(..) => { return r; }
+                            FfiUnsafe(s) => { return FfiBadEnum(def.did, s); }
+                        }
+                    }
+                }
+                FfiSafe
+            }
+
+            ty::TyInt(ast::TyIs) => {
+                FfiUnsafe("found Rust type `isize` in foreign module, while \
+                          `libc::c_int` or `libc::c_long` should be used")
+            }
+            ty::TyUint(ast::TyUs) => {
+                FfiUnsafe("found Rust type `usize` in foreign module, while \
+                          `libc::c_uint` or `libc::c_ulong` should be used")
+            }
+            ty::TyChar => {
+                FfiUnsafe("found Rust type `char` in foreign module, while \
+                           `u32` or `libc::wchar_t` should be used")
+            }
+
+            // Primitive types with a stable representation.
+            ty::TyBool | ty::TyInt(..) | ty::TyUint(..) |
+            ty::TyFloat(..) => FfiSafe,
+
+            ty::TyBox(..) => {
+                FfiUnsafe("found Rust type Box<_> in foreign module, \
+                           consider using a raw pointer instead")
+            }
+
+            ty::TySlice(_) => {
+                FfiUnsafe("found Rust slice type in foreign module, \
+                           consider using a raw pointer instead")
+            }
+
+            ty::TyTrait(..) => {
+                FfiUnsafe("found Rust trait type in foreign module, \
+                           consider using a raw pointer instead")
+            }
+
+            ty::TyStr => {
+                FfiUnsafe("found Rust type `str` in foreign module; \
+                           consider using a `*const libc::c_char`")
+            }
+
+            ty::TyTuple(_) => {
+                FfiUnsafe("found Rust tuple type in foreign module; \
+                           consider using a struct instead`")
+            }
+
+            ty::TyRawPtr(ref m) | ty::TyRef(_, ref m) => {
+                self.check_type_for_ffi(cache, m.ty)
+            }
+
+            ty::TyArray(ty, _) => {
+                self.check_type_for_ffi(cache, ty)
+            }
+
+            ty::TyBareFn(None, bare_fn) => {
+                match bare_fn.abi {
+                    abi::Rust |
+                    abi::RustIntrinsic |
+                    abi::RustCall => {
+                        return FfiUnsafe(
+                            "found function pointer with Rust calling \
+                             convention in foreign module; consider using an \
+                             `extern` function pointer")
+                    }
+                    _ => {}
+                }
+
+                let sig = cx.erase_late_bound_regions(&bare_fn.sig);
+                match sig.output {
+                    ty::FnDiverging => {}
+                    ty::FnConverging(output) => {
+                        if !output.is_nil() {
+                            let r = self.check_type_for_ffi(cache, output);
+                            match r {
+                                FfiSafe => {}
+                                _ => { return r; }
+                            }
+                        }
+                    }
+                }
+                for arg in sig.inputs {
+                    let r = self.check_type_for_ffi(cache, arg);
+                    match r {
+                        FfiSafe => {}
+                        _ => { return r; }
+                    }
+                }
+                FfiSafe
+            }
+
+            ty::TyParam(..) | ty::TyInfer(..) | ty::TyError |
+            ty::TyClosure(..) | ty::TyProjection(..) |
+            ty::TyBareFn(Some(_), _) => {
+                panic!("Unexpected type in foreign function")
+            }
+        }
+    }
+
+    fn check_def(&mut self, sp: Span, id: ast::NodeId) {
+        let tty = ast_ty_to_normalized(self.cx.tcx, id);
+
+        match ImproperCTypesVisitor::check_type_for_ffi(self, &mut FnvHashSet(), tty) {
+            FfiResult::FfiSafe => {}
+            FfiResult::FfiUnsafe(s) => {
+                self.cx.span_lint(IMPROPER_CTYPES, sp, s);
+            }
+            FfiResult::FfiBadStruct(_, s) => {
+                // FIXME: This diagnostic is difficult to read, and doesn't
+                // point at the relevant field.
+                self.cx.span_lint(IMPROPER_CTYPES, sp,
+                    &format!("found non-foreign-function-safe member in \
+                              struct marked #[repr(C)]: {}", s));
+            }
+            FfiResult::FfiBadEnum(_, s) => {
+                // FIXME: This diagnostic is difficult to read, and doesn't
+                // point at the relevant variant.
+                self.cx.span_lint(IMPROPER_CTYPES, sp,
+                    &format!("found non-foreign-function-safe member in \
+                              enum: {}", s));
+            }
         }
     }
 }
 
 impl<'a, 'tcx, 'v> Visitor<'v> for ImproperCTypesVisitor<'a, 'tcx> {
     fn visit_ty(&mut self, ty: &ast::Ty) {
-        if let ast::TyPath(..) = ty.node {
-            self.check_def(ty.span, ty.id);
+        match ty.node {
+            ast::TyPath(..) |
+            ast::TyBareFn(..) => self.check_def(ty.span, ty.id),
+            ast::TyVec(..) => {
+                self.cx.span_lint(IMPROPER_CTYPES, ty.span,
+                    "found Rust slice type in foreign module, consider \
+                     using a raw pointer instead");
+            }
+            ast::TyFixedLengthVec(ref ty, _) => self.visit_ty(ty),
+            ast::TyTup(..) => {
+                self.cx.span_lint(IMPROPER_CTYPES, ty.span,
+                    "found Rust tuple type in foreign module; \
+                     consider using a struct instead`")
+            }
+            _ => visit::walk_ty(self, ty)
         }
-        visit::walk_ty(self, ty);
     }
 }
 
@@ -457,7 +712,10 @@ impl LintPass for ImproperCTypes {
                 check_ty(cx, &*input.ty);
             }
             if let ast::Return(ref ret_ty) = decl.output {
-                check_ty(cx, &**ret_ty);
+                let tty = ast_ty_to_normalized(cx.tcx, ret_ty.id);
+                if !tty.is_nil() {
+                    check_ty(cx, &ret_ty);
+                }
             }
         }
 
@@ -585,8 +843,8 @@ impl LintPass for RawPointerDerive {
                 }
 
                 match cx.tcx.node_id_to_type(item.id).sty {
-                    ty::TyEnum(did, _) => did,
-                    ty::TyStruct(did, _) => did,
+                    ty::TyEnum(def, _) => def.did,
+                    ty::TyStruct(def, _) => def.did,
                     _ => return,
                 }
             }
@@ -732,16 +990,16 @@ impl LintPass for UnusedResults {
         let warned = match t.sty {
             ty::TyTuple(ref tys) if tys.is_empty() => return,
             ty::TyBool => return,
-            ty::TyStruct(did, _) |
-            ty::TyEnum(did, _) => {
-                if ast_util::is_local(did) {
-                    if let ast_map::NodeItem(it) = cx.tcx.map.get(did.node) {
+            ty::TyStruct(def, _) |
+            ty::TyEnum(def, _) => {
+                if ast_util::is_local(def.did) {
+                    if let ast_map::NodeItem(it) = cx.tcx.map.get(def.did.node) {
                         check_must_use(cx, &it.attrs, s.span)
                     } else {
                         false
                     }
                 } else {
-                    let attrs = csearch::get_item_attrs(&cx.sess().cstore, did);
+                    let attrs = csearch::get_item_attrs(&cx.sess().cstore, def.did);
                     check_must_use(cx, &attrs[..], s.span)
                 }
             }
@@ -784,7 +1042,7 @@ pub struct NonCamelCaseTypes;
 impl NonCamelCaseTypes {
     fn check_case(&self, cx: &Context, sort: &str, ident: ast::Ident, span: Span) {
         fn is_camel_case(ident: ast::Ident) -> bool {
-            let ident = token::get_ident(ident);
+            let ident = ident.name.as_str();
             if ident.is_empty() {
                 return true;
             }
@@ -805,7 +1063,7 @@ impl NonCamelCaseTypes {
             )).collect::<Vec<_>>().concat()
         }
 
-        let s = token::get_ident(ident);
+        let s = ident.name.as_str();
 
         if !is_camel_case(ident) {
             let c = to_camel_case(&s);
@@ -986,15 +1244,15 @@ impl LintPass for NonSnakeCase {
         match fk {
             visit::FkMethod(ident, _, _) => match method_context(cx, id, span) {
                 MethodContext::PlainImpl => {
-                    self.check_snake_case(cx, "method", &token::get_ident(ident), Some(span))
+                    self.check_snake_case(cx, "method", &ident.name.as_str(), Some(span))
                 },
                 MethodContext::TraitDefaultImpl => {
-                    self.check_snake_case(cx, "trait method", &token::get_ident(ident), Some(span))
+                    self.check_snake_case(cx, "trait method", &ident.name.as_str(), Some(span))
                 },
                 _ => (),
             },
             visit::FkItemFn(ident, _, _, _, _, _) => {
-                self.check_snake_case(cx, "function", &token::get_ident(ident), Some(span))
+                self.check_snake_case(cx, "function", &ident.name.as_str(), Some(span))
             },
             _ => (),
         }
@@ -1002,19 +1260,19 @@ impl LintPass for NonSnakeCase {
 
     fn check_item(&mut self, cx: &Context, it: &ast::Item) {
         if let ast::ItemMod(_) = it.node {
-            self.check_snake_case(cx, "module", &token::get_ident(it.ident), Some(it.span));
+            self.check_snake_case(cx, "module", &it.ident.name.as_str(), Some(it.span));
         }
     }
 
     fn check_trait_item(&mut self, cx: &Context, trait_item: &ast::TraitItem) {
         if let ast::MethodTraitItem(_, None) = trait_item.node {
-            self.check_snake_case(cx, "trait method", &token::get_ident(trait_item.ident),
+            self.check_snake_case(cx, "trait method", &trait_item.ident.name.as_str(),
                                   Some(trait_item.span));
         }
     }
 
     fn check_lifetime_def(&mut self, cx: &Context, t: &ast::LifetimeDef) {
-        self.check_snake_case(cx, "lifetime", &token::get_ident(t.lifetime.name.ident()),
+        self.check_snake_case(cx, "lifetime", &t.lifetime.name.as_str(),
                               Some(t.lifetime.span));
     }
 
@@ -1022,7 +1280,7 @@ impl LintPass for NonSnakeCase {
         if let &ast::PatIdent(_, ref path1, _) = &p.node {
             let def = cx.tcx.def_map.borrow().get(&p.id).map(|d| d.full_def());
             if let Some(def::DefLocal(_)) = def {
-                self.check_snake_case(cx, "variable", &token::get_ident(path1.node), Some(p.span));
+                self.check_snake_case(cx, "variable", &path1.node.name.as_str(), Some(p.span));
             }
         }
     }
@@ -1031,7 +1289,7 @@ impl LintPass for NonSnakeCase {
                         _: ast::Ident, _: &ast::Generics, _: ast::NodeId) {
         for sf in &s.fields {
             if let ast::StructField_ { kind: ast::NamedField(ident, _), .. } = sf.node {
-                self.check_snake_case(cx, "structure field", &token::get_ident(ident),
+                self.check_snake_case(cx, "structure field", &ident.name.as_str(),
                                       Some(sf.span));
             }
         }
@@ -1049,7 +1307,7 @@ pub struct NonUpperCaseGlobals;
 
 impl NonUpperCaseGlobals {
     fn check_upper_case(cx: &Context, sort: &str, ident: ast::Ident, span: Span) {
-        let s = token::get_ident(ident);
+        let s = ident.name.as_str();
 
         if s.chars().any(|c| c.is_lowercase()) {
             let uc = NonSnakeCase::to_snake_case(&s).to_uppercase();
@@ -1230,7 +1488,7 @@ impl LintPass for UnusedImportBraces {
                 if items.len() == 1 {
                     if let ast::PathListIdent {ref name, ..} = items[0].node {
                         let m = format!("braces around {} is unnecessary",
-                                        &token::get_ident(*name));
+                                        name);
                         cx.span_lint(UNUSED_IMPORT_BRACES, item.span,
                                      &m[..]);
                     }
@@ -1266,10 +1524,12 @@ impl LintPass for NonShorthandFieldPatterns {
             });
             for fieldpat in field_pats {
                 if let ast::PatIdent(_, ident, None) = fieldpat.node.pat.node {
-                    if ident.node.as_str() == fieldpat.node.ident.as_str() {
+                    if ident.node.name == fieldpat.node.ident.name {
+                        // FIXME: should this comparison really be done on the name?
+                        // doing it on the ident will fail during compilation of libcore
                         cx.span_lint(NON_SHORTHAND_FIELD_PATTERNS, fieldpat.span,
                                      &format!("the `{}:` in this pattern is redundant and can \
-                                              be removed", ident.node.as_str()))
+                                              be removed", ident.node))
                     }
                 }
             }
@@ -1382,7 +1642,7 @@ impl UnusedMut {
             pat_util::pat_bindings(&cx.tcx.def_map, &**p, |mode, id, _, path1| {
                 let ident = path1.node;
                 if let ast::BindByValue(ast::MutMutable) = mode {
-                    if !token::get_ident(ident).starts_with("_") {
+                    if !ident.name.as_str().starts_with("_") {
                         match mutables.entry(ident.name.usize()) {
                             Vacant(entry) => { entry.insert(vec![id]); },
                             Occupied(mut entry) => { entry.get_mut().push(id); },
@@ -1610,8 +1870,6 @@ impl LintPass for MissingDoc {
                 }
                 return
             },
-            ast::ItemConst(..) => "a constant",
-            ast::ItemStatic(..) => "a static",
             _ => return
         };
 
@@ -1699,14 +1957,14 @@ impl LintPass for MissingCopyImplementations {
                 if ast_generics.is_parameterized() {
                     return;
                 }
-                cx.tcx.mk_struct(local_def(item.id),
+                cx.tcx.mk_struct(cx.tcx.lookup_adt_def(local_def(item.id)),
                                  cx.tcx.mk_substs(Substs::empty()))
             }
             ast::ItemEnum(_, ref ast_generics) => {
                 if ast_generics.is_parameterized() {
                     return;
                 }
-                cx.tcx.mk_enum(local_def(item.id),
+                cx.tcx.mk_enum(cx.tcx.lookup_adt_def(local_def(item.id)),
                                cx.tcx.mk_substs(Substs::empty()))
             }
             _ => return,
@@ -1993,34 +2251,73 @@ impl LintPass for UnconditionalRecursion {
             }
         }
 
-        // Check if the method call `id` refers to method `method`.
+        // Check if the expression `id` performs a call to `method`.
         fn expr_refers_to_this_method(tcx: &ty::ctxt,
                                       method: &ty::Method,
                                       id: ast::NodeId) -> bool {
-            let method_call = ty::MethodCall::expr(id);
-            let callee = match tcx.tables.borrow().method_map.get(&method_call) {
-                Some(&m) => m,
-                None => return false
-            };
-            let callee_item = tcx.impl_or_trait_item(callee.def_id);
+            let tables = tcx.tables.borrow();
+
+            // Check for method calls and overloaded operators.
+            if let Some(m) = tables.method_map.get(&ty::MethodCall::expr(id)) {
+                if method_call_refers_to_method(tcx, method, m.def_id, m.substs, id) {
+                    return true;
+                }
+            }
+
+            // Check for overloaded autoderef method calls.
+            if let Some(&ty::AdjustDerefRef(ref adj)) = tables.adjustments.get(&id) {
+                for i in 0..adj.autoderefs {
+                    let method_call = ty::MethodCall::autoderef(id, i as u32);
+                    if let Some(m) = tables.method_map.get(&method_call) {
+                        if method_call_refers_to_method(tcx, method, m.def_id, m.substs, id) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Check for calls to methods via explicit paths (e.g. `T::method()`).
+            match tcx.map.get(id) {
+                ast_map::NodeExpr(&ast::Expr { node: ast::ExprCall(ref callee, _), .. }) => {
+                    match tcx.def_map.borrow().get(&callee.id).map(|d| d.full_def()) {
+                        Some(def::DefMethod(def_id)) => {
+                            let no_substs = &ty::ItemSubsts::empty();
+                            let ts = tables.item_substs.get(&callee.id).unwrap_or(no_substs);
+                            method_call_refers_to_method(tcx, method, def_id, &ts.substs, id)
+                        }
+                        _ => false
+                    }
+                }
+                _ => false
+            }
+        }
+
+        // Check if the method call to the method with the ID `callee_id`
+        // and instantiated with `callee_substs` refers to method `method`.
+        fn method_call_refers_to_method<'tcx>(tcx: &ty::ctxt<'tcx>,
+                                              method: &ty::Method,
+                                              callee_id: ast::DefId,
+                                              callee_substs: &Substs<'tcx>,
+                                              expr_id: ast::NodeId) -> bool {
+            let callee_item = tcx.impl_or_trait_item(callee_id);
 
             match callee_item.container() {
                 // This is an inherent method, so the `def_id` refers
                 // directly to the method definition.
                 ty::ImplContainer(_) => {
-                    callee.def_id == method.def_id
+                    callee_id == method.def_id
                 }
 
                 // A trait method, from any number of possible sources.
                 // Attempt to select a concrete impl before checking.
                 ty::TraitContainer(trait_def_id) => {
-                    let trait_substs = callee.substs.clone().method_to_trait();
+                    let trait_substs = callee_substs.clone().method_to_trait();
                     let trait_substs = tcx.mk_substs(trait_substs);
                     let trait_ref = ty::TraitRef::new(trait_def_id, trait_substs);
                     let trait_ref = ty::Binder(trait_ref);
-                    let span = tcx.map.span(id);
+                    let span = tcx.map.span(expr_id);
                     let obligation =
-                        traits::Obligation::new(traits::ObligationCause::misc(span, id),
+                        traits::Obligation::new(traits::ObligationCause::misc(span, expr_id),
                                                 trait_ref.to_poly_trait_predicate());
 
                     let param_env = ty::ParameterEnvironment::for_item(tcx, method.def_id.node);
@@ -2031,12 +2328,12 @@ impl LintPass for UnconditionalRecursion {
                         // If `T` is `Self`, then this call is inside
                         // a default method definition.
                         Ok(Some(traits::VtableParam(_))) => {
-                            let self_ty = callee.substs.self_ty();
+                            let self_ty = callee_substs.self_ty();
                             let on_self = self_ty.map_or(false, |t| t.is_self());
                             // We can only be recurring in a default
                             // method if we're being called literally
                             // on the `Self` type.
-                            on_self && callee.def_id == method.def_id
+                            on_self && callee_id == method.def_id
                         }
 
                         // The `impl` is known, so we check that with a
@@ -2196,7 +2493,7 @@ impl LintPass for MutableTransmutes {
                 ast::ExprPath(..) => (),
                 _ => return None
             }
-            if let DefFn(did, _) = cx.tcx.resolve_expr(expr) {
+            if let def::DefFn(did, _) = cx.tcx.resolve_expr(expr) {
                 if !def_id_is_transmute(cx, did) {
                     return None;
                 }
@@ -2279,9 +2576,9 @@ impl LintPass for DropWithReprExtern {
                 };
 
             match dtor_self_type.sty {
-                ty::TyEnum(self_type_did, _) |
-                ty::TyStruct(self_type_did, _) |
-                ty::TyClosure(self_type_did, _) => {
+                ty::TyEnum(self_type_def, _) |
+                ty::TyStruct(self_type_def, _) => {
+                    let self_type_did = self_type_def.did;
                     let hints = ctx.tcx.lookup_repr_hints(self_type_did);
                     if hints.iter().any(|attr| *attr == attr::ReprExtern) &&
                         ctx.tcx.ty_dtor(self_type_did).has_drop_flag() {

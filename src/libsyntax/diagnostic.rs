@@ -208,6 +208,10 @@ impl Handler {
     }
     pub fn fatal(&self, msg: &str) -> ! {
         self.emit.borrow_mut().emit(None, msg, None, Fatal);
+
+        // Suppress the fatal error message from the panic below as we've
+        // already terminated in our own "legitimate" fashion.
+        io::set_panic(Box::new(io::sink()));
         panic!(FatalError);
     }
     pub fn err(&self, msg: &str) {
@@ -318,6 +322,20 @@ enum Destination {
     Raw(Box<Write + Send>),
 }
 
+/// Do not use this for messages that end in `\n` – use `println_maybe_styled` instead. See
+/// `EmitterWriter::print_maybe_styled` for details.
+macro_rules! print_maybe_styled {
+    ($writer: expr, $style: expr, $($arg: tt)*) => {
+        $writer.print_maybe_styled(format_args!($($arg)*), $style, false)
+    }
+}
+
+macro_rules! println_maybe_styled {
+    ($writer: expr, $style: expr, $($arg: tt)*) => {
+        $writer.print_maybe_styled(format_args!($($arg)*), $style, true)
+    }
+}
+
 impl EmitterWriter {
     pub fn stderr(color_config: ColorConfig,
                   registry: Option<diagnostics::registry::Registry>) -> EmitterWriter {
@@ -346,8 +364,9 @@ impl EmitterWriter {
     }
 
     fn print_maybe_styled(&mut self,
-                          msg: &str,
-                          color: term::attr::Attr) -> io::Result<()> {
+                          args: fmt::Arguments,
+                          color: term::attr::Attr,
+                          print_newline_at_end: bool) -> io::Result<()> {
         match self.dst {
             Terminal(ref mut t) => {
                 try!(t.attr(color));
@@ -364,17 +383,22 @@ impl EmitterWriter {
                 // once, which still leaves the opportunity for interleaved output
                 // to be miscolored. We assume this is rare enough that we don't
                 // have to worry about it.
-                if msg.ends_with("\n") {
-                    try!(t.write_all(msg[..msg.len()-1].as_bytes()));
-                    try!(t.reset());
-                    try!(t.write_all(b"\n"));
+                try!(t.write_fmt(args));
+                try!(t.reset());
+                if print_newline_at_end {
+                    t.write_all(b"\n")
                 } else {
-                    try!(t.write_all(msg.as_bytes()));
-                    try!(t.reset());
+                    Ok(())
                 }
-                Ok(())
             }
-            Raw(ref mut w) => w.write_all(msg.as_bytes()),
+            Raw(ref mut w) => {
+                try!(w.write_fmt(args));
+                if print_newline_at_end {
+                    w.write_all(b"\n")
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 
@@ -384,15 +408,14 @@ impl EmitterWriter {
             try!(write!(&mut self.dst, "{} ", topic));
         }
 
-        try!(self.print_maybe_styled(&format!("{}: ", lvl.to_string()),
-                                     term::attr::ForegroundColor(lvl.color())));
-        try!(self.print_maybe_styled(&format!("{}", msg),
-                                     term::attr::Bold));
+        try!(print_maybe_styled!(self, term::attr::ForegroundColor(lvl.color()),
+                                 "{}: ", lvl.to_string()));
+        try!(print_maybe_styled!(self, term::attr::Bold, "{}", msg));
 
         match code {
             Some(code) => {
                 let style = term::attr::ForegroundColor(term::color::BRIGHT_MAGENTA);
-                try!(self.print_maybe_styled(&format!(" [{}]", code.clone()), style));
+                try!(print_maybe_styled!(self, style, " [{}]", code.clone()));
             }
             None => ()
         }
@@ -623,8 +646,8 @@ impl EmitterWriter {
                     s.pop();
                 }
 
-                try!(self.print_maybe_styled(&format!("{}\n", s),
-                                             term::attr::ForegroundColor(lvl.color())));
+                try!(println_maybe_styled!(self, term::attr::ForegroundColor(lvl.color()),
+                                           "{}", s));
             }
         }
         Ok(())
@@ -696,9 +719,8 @@ impl EmitterWriter {
             }
         }
         s.push('^');
-        s.push('\n');
-        self.print_maybe_styled(&s[..],
-                                term::attr::ForegroundColor(lvl.color()))
+        println_maybe_styled!(self, term::attr::ForegroundColor(lvl.color()),
+                              "{}", s)
     }
 
     fn print_macro_backtrace(&mut self,
@@ -837,12 +859,7 @@ mod test {
         tolv
         dreizehn
         ";
-        let file = cm.new_filemap("dummy.txt".to_string(), content.to_string());
-        for (i, b) in content.bytes().enumerate() {
-            if b == b'\n' {
-                file.next_line(BytePos(i as u32));
-            }
-        }
+        let file = cm.new_filemap_and_lines("dummy.txt", content);
         let start = file.lines.borrow()[7];
         let end = file.lines.borrow()[11];
         let sp = mk_sp(start, end);
@@ -854,11 +871,12 @@ mod test {
         println!("done");
         let vec = data.lock().unwrap().clone();
         let vec: &[u8] = &vec;
-        println!("{}", from_utf8(vec).unwrap());
-        assert_eq!(vec, "dummy.txt: 8 \n\
-                         dummy.txt: 9 \n\
-                         dummy.txt:10 \n\
-                         dummy.txt:11 \n\
-                         dummy.txt:12 \n".as_bytes());
+        let str = from_utf8(vec).unwrap();
+        println!("{}", str);
+        assert_eq!(str, "dummy.txt: 8         line8\n\
+                         dummy.txt: 9         line9\n\
+                         dummy.txt:10         line10\n\
+                         dummy.txt:11         e-lä-vän\n\
+                         dummy.txt:12         tolv\n");
     }
 }

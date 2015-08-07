@@ -17,15 +17,16 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use fmt;
 use ffi::OsString;
 use io::{self, SeekFrom, Seek, Read, Write};
 use path::{Path, PathBuf};
 use sys::fs as fs_imp;
-use sys_common::{AsInnerMut, FromInner, AsInner};
 use sys_common::io::read_to_end_uninitialized;
+use sys_common::{AsInnerMut, FromInner, AsInner, IntoInner};
 use vec::Vec;
 
 /// A reference to an open file on the filesystem.
@@ -315,6 +316,11 @@ impl AsInner<fs_imp::File> for File {
 impl FromInner<fs_imp::File> for File {
     fn from_inner(f: fs_imp::File) -> File {
         File { inner: f }
+    }
+}
+impl IntoInner<fs_imp::File> for File {
+    fn into_inner(self) -> fs_imp::File {
+        self.inner
     }
 }
 
@@ -849,6 +855,8 @@ pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> 
 /// Note that if `from` and `to` both point to the same file, then the file
 /// will likely get truncated by this operation.
 ///
+/// On success, the total number of bytes copied is returned.
+///
 /// # Errors
 ///
 /// This function will return an error in the following situations, but is not
@@ -1220,6 +1228,9 @@ impl PathExt for Path {
            reason = "the argument type of u64 is not quite appropriate for \
                      this function and may change if the standard library \
                      gains a type to represent a moment in time")]
+#[deprecated(since = "1.3.0",
+             reason = "will never be stabilized as-is and its replacement will \
+                       likely have a totally new API")]
 pub fn set_file_times<P: AsRef<Path>>(path: P, accessed: u64,
                                  modified: u64) -> io::Result<()> {
     fs_imp::utimes(path.as_ref(), accessed, modified)

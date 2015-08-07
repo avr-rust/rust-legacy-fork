@@ -34,8 +34,8 @@
 /// # Examples
 ///
 /// ```{.rust}
-/// # #![feature(rustc_private)]
-/// # #![feature(associated_consts)]
+/// #![feature(rustc_private)]
+/// #![feature(associated_consts)]
 /// #[macro_use] extern crate rustc_bitflags;
 ///
 /// bitflags! {
@@ -62,7 +62,7 @@
 /// The generated `struct`s can also be extended with type and trait implementations:
 ///
 /// ```{.rust}
-/// # #![feature(rustc_private)]
+/// #![feature(rustc_private)]
 /// #[macro_use] extern crate rustc_bitflags;
 ///
 /// use std::fmt;
@@ -288,13 +288,6 @@ macro_rules! bitflags {
             }
         }
     };
-}
-
-// This is a no_std crate. So the test code's invocation of #[derive] etc, via
-// bitflags!, will use names from the underlying crates.
-#[cfg(test)]
-mod core {
-    pub use std::{fmt, hash, clone, cmp, marker, option};
 }
 
 #[cfg(test)]

@@ -169,24 +169,6 @@ match string {
 ```
 "##,
 
-E0030: r##"
-When matching against a range, the compiler verifies that the range is
-non-empty.  Range patterns include both end-points, so this is equivalent to
-requiring the start of the range to be less than or equal to the end of the
-range.
-
-For example:
-
-```
-match 5u32 {
-    // This range is ok, albeit pointless.
-    1 ... 1 => ...
-    // This range is empty, and the compiler can tell.
-    1000 ... 5 => ...
-}
-```
-"##,
-
 E0033: r##"
 This error indicates that a pointer to a trait type cannot be implicitly
 dereferenced by a pattern. Every trait defines a type, but because the
@@ -602,7 +584,7 @@ extern "C" {
 ```
 
 Using this declaration, it must be called with at least one argument, so
-simply calling `printf()` is illegal. But the following uses are allowed:
+simply calling `printf()` is invalid. But the following uses are allowed:
 
 ```
 unsafe {
@@ -796,7 +778,7 @@ the pointer the size of the type would need to be unbounded.
 Consider the following erroneous definition of a type for a list of bytes:
 
 ```
-// error, illegal recursive struct type
+// error, invalid recursive struct type
 struct ListNode {
     head: u8,
     tail: Option<ListNode>,
@@ -842,6 +824,121 @@ struct Foo { x: Option<Box<Foo>> }
 ```
 
 Now it's possible to create at least one instance of `Foo`: `Foo { x: None }`.
+"##,
+
+E0074: r##"
+When using the `#[simd]` attribute on a tuple struct, the components of the
+tuple struct must all be of a concrete, nongeneric type so the compiler can
+reason about how to use SIMD with them. This error will occur if the types
+are generic.
+
+```
+#[simd]
+struct Bad<T>(T, T, T); // This will cause an error
+
+#[simd]
+struct Good(u32, u32, u32); // This will not
+```
+"##,
+
+E0075: r##"
+The `#[simd]` attribute can only be applied to non empty tuple structs, because
+it doesn't make sense to try to use SIMD operations when there are no values to
+operate on.
+
+```
+#[simd]
+struct Bad; // This will cause an error
+
+#[simd]
+struct Good(u32); // This will not
+```
+"##,
+
+E0076: r##"
+When using the `#[simd]` attribute to automatically use SIMD operations in tuple
+struct, the types in the struct must all be of the same type, or the compiler
+will trigger this error.
+
+```
+#[simd]
+struct Bad(u16, u32, u32); // This will cause an error
+
+#[simd]
+struct Good(u32, u32, u32); // This will not
+```
+
+"##,
+
+E0077: r##"
+When using the `#[simd]` attribute on a tuple struct, the elements in the tuple
+must be machine types so SIMD operations can be applied to them.
+
+```
+#[simd]
+struct Bad(String); // This will cause an error
+
+#[simd]
+struct Good(u32, u32, u32); // This will not
+```
+"##,
+
+E0079: r##"
+Enum variants which contain no data can be given a custom integer
+representation. This error indicates that the value provided is not an integer
+literal and is therefore invalid.
+
+For example, in the following code,
+
+```
+enum Foo {
+    Q = "32"
+}
+```
+
+we try to set the representation to a string.
+
+There's no general fix for this; if you can work with an integer then just set
+it to one:
+
+```
+enum Foo {
+    Q = 32
+}
+```
+
+however if you actually wanted a mapping between variants and non-integer
+objects, it may be preferable to use a method with a match instead:
+
+```
+enum Foo { Q }
+impl Foo {
+    fn get_str(&self) -> &'static str {
+        match *self {
+            Foo::Q => "32",
+        }
+    }
+}
+```
+"##,
+
+E0080: r##"
+This error indicates that the compiler was unable to sensibly evaluate an
+integer expression provided as an enum discriminant. Attempting to divide by 0
+or causing integer overflow are two ways to induce this error. For example:
+
+```
+enum Enum {
+    X = (1 << 500),
+    Y = (1 / 0)
+}
+```
+
+Ensure that the expressions given can be evaluated as the desired integer type.
+See the FFI section of the Reference for more information about using a custom
+integer type:
+
+https://doc.rust-lang.org/reference.html#ffi-attributes
 "##,
 
 E0081: r##"
@@ -1245,30 +1342,28 @@ impl Bytes { ... } // error, same as above
 "##,
 
 E0117: r##"
-You got this error because because you tried to implement a foreign
-trait for a foreign type (with maybe a foreign type parameter). Erroneous
-code example:
+This error indicates a violation of one of Rust's orphan rules for trait
+implementations. The rule prohibits any implementation of a foreign trait (a
+trait defined in another crate) where
+
+ - the type that is implementing the trait is foreign
+ - all of the parameters being passed to the trait (if there are any) are also
+   foreign.
+
+Here's one example of this error:
 
 ```
 impl Drop for u32 {}
 ```
 
-The type, trait or the type parameter (or all of them) has to be defined
-in your crate. Example:
+To avoid this kind of error, ensure that at least one local type is referenced
+by the `impl`:
 
 ```
 pub struct Foo; // you define your type in your crate
 
 impl Drop for Foo { // and you can implement the trait on it!
     // code of trait implementation here
-}
-
-trait Bar { // or define your trait in your crate
-    fn get(&self) -> usize;
-}
-
-impl Bar for u32 { // and then you implement it on a foreign type
-    fn get(&self) -> usize { 0 }
 }
 
 impl From<Foo> for i32 { // or you use a type from your crate as
@@ -1278,11 +1373,27 @@ impl From<Foo> for i32 { // or you use a type from your crate as
     }
 }
 ```
+
+Alternatively, define a trait locally and implement that instead:
+
+```
+trait Bar {
+    fn get(&self) -> usize;
+}
+
+impl Bar for u32 {
+    fn get(&self) -> usize { 0 }
+}
+```
+
+For information on the design of the orphan rules, see [RFC 1023].
+
+[RFC 1023]: https://github.com/rust-lang/rfcs/pull/1023
 "##,
 
 E0119: r##"
 There are conflicting trait implementations for the same type.
-Erroneous code example:
+Example of erroneous code:
 
 ```
 trait MyTrait {
@@ -1303,7 +1414,10 @@ impl MyTrait for Foo { // error: conflicting implementations for trait
 }
 ```
 
-When you write:
+When looking for the implementation for the trait, the compiler finds
+both the `impl<T> MyTrait for T` where T is all types and the `impl
+MyTrait for Foo`. Since a trait cannot be implemented multiple times,
+this is an error. So, when you write:
 
 ```
 impl<T> MyTrait for T {
@@ -1330,6 +1444,45 @@ fn main() {
     let f = Foo;
 
     f.get(); // the trait is implemented so we can use it
+}
+```
+"##,
+
+E0120: r##"
+An attempt was made to implement Drop on a trait, which is not allowed: only
+structs and enums can implement Drop. An example causing this error:
+
+```
+trait MyTrait {}
+
+impl Drop for MyTrait {
+    fn drop(&mut self) {}
+}
+```
+
+A workaround for this problem is to wrap the trait up in a struct, and implement
+Drop on that. An example is shown below:
+
+```
+trait MyTrait {}
+struct MyWrapper<T: MyTrait> { foo: T }
+
+impl <T: MyTrait> Drop for MyWrapper<T> {
+    fn drop(&mut self) {}
+}
+
+```
+
+Alternatively, wrapping trait objects requires something like the following:
+
+```
+trait MyTrait {}
+
+//or Box<MyTrait>, if you wanted an owned trait object
+struct MyWrapper<'a> { foo: &'a MyTrait }
+
+impl <'a> Drop for MyWrapper<'a> {
+    fn drop(&mut self) {}
 }
 ```
 "##,
@@ -1474,6 +1627,33 @@ fn foo() -> ! { return; } // error
 For a function that diverges, every control path in the function must never
 return, for example with a `loop` that never breaks or a call to another
 diverging function (such as `panic!()`).
+"##,
+
+E0172: r##"
+This error means that an attempt was made to specify the type of a variable with
+a combination of a concrete type and a trait. Consider the following example:
+
+```
+fn foo(bar: i32+std::fmt::Display) {}
+```
+
+The code is trying to specify that we want to receive a signed 32-bit integer
+which also implements `Display`. This doesn't make sense: when we pass `i32`, a
+concrete type, it implicitly includes all of the traits that it implements.
+This includes `Display`, `Debug`, `Clone`, and a host of others.
+
+If `i32` implements the trait we desire, there's no need to specify the trait
+separately. If it does not, then we need to `impl` the trait for `i32` before
+passing it into `foo`. Either way, a fixed definition for `foo` will look like
+the following:
+
+```
+fn foo(bar: i32) {}
+```
+
+To learn more about traits, take a look at the Book:
+
+https://doc.rust-lang.org/book/traits.html
 "##,
 
 E0178: r##"
@@ -1838,6 +2018,71 @@ impl MyTrait for Foo {
 ```
 "##,
 
+E0210: r##"
+This error indicates a violation of one of Rust's orphan rules for trait
+implementations. The rule concerns the use of type parameters in an
+implementation of a foreign trait (a trait defined in another crate), and
+states that type parameters must be "covered" by a local type. To understand
+what this means, it is perhaps easiest to consider a few examples.
+
+If `ForeignTrait` is a trait defined in some external crate `foo`, then the
+following trait `impl` is an error:
+
+```
+extern crate foo;
+use foo::ForeignTrait;
+
+impl<T> ForeignTrait for T { ... } // error
+```
+
+To work around this, it can be covered with a local type, `MyType`:
+
+```
+struct MyType<T>(T);
+impl<T> ForeignTrait for MyType<T> { ... } // Ok
+```
+
+For another example of an error, suppose there's another trait defined in `foo`
+named `ForeignTrait2` that takes two type parameters. Then this `impl` results
+in the same rule violation:
+
+```
+struct MyType2;
+impl<T> ForeignTrait2<T, MyType<T>> for MyType2 { ... } // error
+```
+
+The reason for this is that there are two appearances of type parameter `T` in
+the `impl` header, both as parameters for `ForeignTrait2`. The first appearance
+is uncovered, and so runs afoul of the orphan rule.
+
+Consider one more example:
+
+```
+impl<T> ForeignTrait2<MyType<T>, T> for MyType2 { ... } // Ok
+```
+
+This only differs from the previous `impl` in that the parameters `T` and
+`MyType<T>` for `ForeignTrait2` have been swapped. This example does *not*
+violate the orphan rule; it is permitted.
+
+To see why that last example was allowed, you need to understand the general
+rule. Unfortunately this rule is a bit tricky to state. Consider an `impl`:
+
+```
+impl<P1, ..., Pm> ForeignTrait<T1, ..., Tn> for T0 { ... }
+```
+
+where `P1, ..., Pm` are the type parameters of the `impl` and `T0, ..., Tn`
+are types. One of the types `T0, ..., Tn` must be a local type (this is another
+orphan rule, see the explanation for E0117). Let `i` be the smallest integer
+such that `Ti` is a local type. Then no type parameter can appear in any of the
+`Tj` for `j < i`.
+
+For information on the design of the orphan rules, see [RFC 1023].
+
+[RFC 1023]: https://github.com/rust-lang/rfcs/pull/1023
+"##,
+
 E0211: r##"
 You used an intrinsic function which doesn't correspond to its
 definition. Erroneous code example:
@@ -1883,6 +2128,62 @@ trait Trait {
 }
 
 type Foo = Trait<Bar=i32>; // ok!
+```
+"##,
+
+E0223: r##"
+An attempt was made to retrieve an associated type, but the type was ambiguous.
+For example:
+
+```
+trait MyTrait {type X; }
+
+fn main() {
+    let foo: MyTrait::X;
+}
+```
+
+The problem here is that we're attempting to take the type of X from MyTrait.
+Unfortunately, the type of X is not defined, because it's only made concrete in
+implementations of the trait. A working version of this code might look like:
+
+```
+trait MyTrait {type X; }
+struct MyStruct;
+
+impl MyTrait for MyStruct {
+    type X = u32;
+}
+
+fn main() {
+    let foo: <MyStruct as MyTrait>::X;
+}
+```
+
+This syntax specifies that we want the X type from MyTrait, as made concrete in
+MyStruct. The reason that we cannot simply use `MyStruct::X` is that MyStruct
+might implement two different traits with identically-named associated types.
+This syntax allows disambiguation between the two.
+"##,
+
+E0225: r##"
+You attempted to use multiple types as bounds for a closure or trait object.
+Rust does not currently support this. A simple example that causes this error:
+
+```
+fn main() {
+    let _: Box<std::io::Read+std::io::Write>;
+}
+```
+
+Builtin traits are an exception to this rule: it's possible to have bounds of
+one non-builtin type, plus any number of builtin types. For example, the
+following compiles correctly:
+
+```
+fn main() {
+    let _: Box<std::io::Read+Copy+Sync>;
+}
 ```
 "##,
 
@@ -2109,16 +2410,89 @@ E0380: r##"
 Default impls are only allowed for traits with no methods or associated items.
 For more information see the [opt-in builtin traits RFC](https://github.com/rust
 -lang/rfcs/blob/master/text/0019-opt-in-builtin-traits.md).
+"##,
+
+E0391: r##"
+This error indicates that some types or traits depend on each other
+and therefore cannot be constructed.
+
+The following example contains a circular dependency between two traits:
+
+```
+trait FirstTrait : SecondTrait {
+
+}
+
+trait SecondTrait : FirstTrait {
+
+}
+```
+"##,
+
+E0392: r##"
+This error indicates that a type or lifetime parameter has been declared
+but not actually used.  Here is an example that demonstrates the error:
+
+```
+enum Foo<T> {
+    Bar
+}
+```
+
+If the type parameter was included by mistake, this error can be fixed
+by simply removing the type parameter, as shown below:
+
+```
+enum Foo {
+    Bar
+}
+```
+
+Alternatively, if the type parameter was intentionally inserted, it must be
+used. A simple fix is shown below:
+
+```
+enum Foo<T> {
+    Bar(T)
+}
+```
+
+This error may also commonly be found when working with unsafe code. For
+example, when using raw pointers one may wish to specify the lifetime for
+which the pointed-at data is valid. An initial attempt (below) causes this
+error:
+
+```
+struct Foo<'a, T> {
+    x: *const T
+}
+```
+
+We want to express the constraint that Foo should not outlive `'a`, because
+the data pointed to by `T` is only valid for that lifetime. The problem is
+that there are no actual uses of `'a`. It's possible to work around this
+by adding a PhantomData type to the struct, using it to tell the compiler
+to act as if the struct contained a borrowed reference `&'a T`:
+
+```
+use std::marker::PhantomData;
+
+struct Foo<'a, T: 'a> {
+    x: *const T,
+    phantom: PhantomData<&'a T>
+}
+```
+
+PhantomData can also be used to express information about unused type
+parameters. You can read more about it in the API documentation:
+
+https://doc.rust-lang.org/std/marker/struct.PhantomData.html
 "##
 
 }
 
 register_diagnostics! {
     E0068,
-    E0074,
-    E0075,
-    E0076,
-    E0077,
     E0085,
     E0086,
     E0090,
@@ -2126,7 +2500,6 @@ register_diagnostics! {
     E0103,
     E0104,
     E0118,
-    E0120,
     E0122,
     E0123,
     E0127,
@@ -2136,7 +2509,6 @@ register_diagnostics! {
     E0164,
     E0167,
     E0168,
-    E0172,
     E0173, // manual implementations of unboxed closure traits are experimental
     E0174, // explicit use of unboxed closure methods are experimental
     E0182,
@@ -2153,21 +2525,18 @@ register_diagnostics! {
            // and only one is supported
     E0208,
     E0209, // builtin traits can only be implemented on structs or enums
-    E0210, // type parameter is not constrained by any local type
     E0212, // cannot extract an associated type from a higher-ranked trait bound
     E0213, // associated types are not accepted in this context
     E0214, // parenthesized parameters may only be used with a trait
-    E0215, // angle-bracket notation is not stable with `Fn`
-    E0216, // parenthetical notation is only stable with `Fn`
+//  E0215, // angle-bracket notation is not stable with `Fn`
+//  E0216, // parenthetical notation is only stable with `Fn`
     E0217, // ambiguous associated type, defined in multiple supertraits
     E0218, // no associated type defined
     E0219, // associated type defined in higher-ranked supertrait
     E0221, // ambiguous associated type in bounds
-    //E0222, // Error code E0045 (variadic function must have C calling
-             // convention) duplicate
-    E0223, // ambiguous associated type
+//  E0222, // Error code E0045 (variadic function must have C calling
+           // convention) duplicate
     E0224, // at least one non-builtin train is required for an object type
-    E0225, // only the builtin traits can be used as closure or object bounds
     E0226, // only a single explicit lifetime bound is permitted
     E0227, // ambiguous lifetime bound, explicit lifetime bound required
     E0228, // explicit lifetime bound required
@@ -2185,7 +2554,7 @@ register_diagnostics! {
     E0241,
     E0242, // internal error looking up a definition
     E0245, // not a trait
-    E0246, // illegal recursive type
+    E0246, // invalid recursive type
     E0247, // found module name used as a type
     E0248, // found value name used as a type
     E0319, // trait impls for defaulted traits allowed just for structs/enums
@@ -2199,6 +2568,7 @@ register_diagnostics! {
     E0366, // dropck forbid specialization to concrete type or region
     E0367, // dropck forbid specialization to predicate not in struct/enum
     E0369, // binary operation `<op>` cannot be applied to types
+    E0370, // discriminant overflow
     E0374, // the trait `CoerceUnsized` may only be implemented for a coercion
            // between structures with one field being coerced, none found
     E0375, // the trait `CoerceUnsized` may only be implemented for a coercion
@@ -2210,8 +2580,6 @@ register_diagnostics! {
            // between structures with the same definition
     E0390, // only a single inherent implementation marked with
            // `#[lang = \"{}\"]` is allowed for the `{}` primitive
-    E0391, // unsupported cyclic reference between types/traits detected
-    E0392, // parameter `{}` is never used
     E0393, // the type parameter `{}` must be explicitly specified in an object
            // type because its default value `{}` references the type `Self`"
     E0399, // trait items need to be implemented because the associated

@@ -41,7 +41,6 @@
 #![feature(fnbox)]
 #![feature(iter_cmp)]
 #![feature(libc)]
-#![feature(rt)]
 #![feature(rustc_private)]
 #![feature(set_stdio)]
 #![feature(staged_api)]
@@ -198,7 +197,8 @@ pub struct Bencher {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ShouldPanic {
     No,
-    Yes(Option<&'static str>)
+    Yes,
+    YesWithMessage(&'static str)
 }
 
 // The definition of a single test. A test runner will run a list of
@@ -263,8 +263,8 @@ pub fn test_main(args: &[String], tests: Vec<TestDescAndFn> ) {
 // a Vec<TestDescAndFn> is used in order to effect ownership-transfer
 // semantics into parallel test runners, which in turn requires a Vec<>
 // rather than a &[].
-pub fn test_main_static(args: env::Args, tests: &[TestDescAndFn]) {
-    let args = args.collect::<Vec<_>>();
+pub fn test_main_static(tests: &[TestDescAndFn]) {
+    let args = env::args().collect::<Vec<_>>();
     let owned_tests = tests.iter().map(|t| {
         match t.testfn {
             StaticTestFn(f) => TestDescAndFn { testfn: StaticTestFn(f), desc: t.desc.clone() },
@@ -879,13 +879,7 @@ fn get_concurrency() -> usize {
                 _ => panic!("RUST_TEST_THREADS is `{}`, should be a positive integer.", s)
             }
         }
-        Err(..) => {
-            if std::rt::util::limit_thread_creation_due_to_osx_and_valgrind() {
-                1
-            } else {
-                num_cpus()
-            }
-        }
+        Err(..) => num_cpus(),
     };
 
     #[cfg(windows)]
@@ -1034,8 +1028,8 @@ pub fn run_test(opts: &TestOpts,
 fn calc_result(desc: &TestDesc, task_result: Result<(), Box<Any+Send>>) -> TestResult {
     match (&desc.should_panic, task_result) {
         (&ShouldPanic::No, Ok(())) |
-        (&ShouldPanic::Yes(None), Err(_)) => TrOk,
-        (&ShouldPanic::Yes(Some(msg)), Err(ref err))
+        (&ShouldPanic::Yes, Err(_)) => TrOk,
+        (&ShouldPanic::YesWithMessage(msg), Err(ref err))
             if err.downcast_ref::<String>()
                 .map(|e| &**e)
                 .or_else(|| err.downcast_ref::<&'static str>().map(|e| *e))
@@ -1283,7 +1277,7 @@ mod tests {
             desc: TestDesc {
                 name: StaticTestName("whatever"),
                 ignore: false,
-                should_panic: ShouldPanic::Yes(None)
+                should_panic: ShouldPanic::Yes,
             },
             testfn: DynTestFn(Box::new(move|| f())),
         };
@@ -1300,7 +1294,7 @@ mod tests {
             desc: TestDesc {
                 name: StaticTestName("whatever"),
                 ignore: false,
-                should_panic: ShouldPanic::Yes(Some("error message"))
+                should_panic: ShouldPanic::YesWithMessage("error message"),
             },
             testfn: DynTestFn(Box::new(move|| f())),
         };
@@ -1317,7 +1311,7 @@ mod tests {
             desc: TestDesc {
                 name: StaticTestName("whatever"),
                 ignore: false,
-                should_panic: ShouldPanic::Yes(Some("foobar"))
+                should_panic: ShouldPanic::YesWithMessage("foobar"),
             },
             testfn: DynTestFn(Box::new(move|| f())),
         };
@@ -1334,7 +1328,7 @@ mod tests {
             desc: TestDesc {
                 name: StaticTestName("whatever"),
                 ignore: false,
-                should_panic: ShouldPanic::Yes(None)
+                should_panic: ShouldPanic::Yes,
             },
             testfn: DynTestFn(Box::new(move|| f())),
         };

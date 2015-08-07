@@ -35,7 +35,7 @@ use ast::{ItemMac, ItemMod, ItemStruct, ItemTrait, ItemTy, ItemDefaultImpl};
 use ast::{ItemExternCrate, ItemUse};
 use ast::{LifetimeDef, Lit, Lit_};
 use ast::{LitBool, LitChar, LitByte, LitBinary};
-use ast::{LitStr, LitInt, Local, LocalLet};
+use ast::{LitStr, LitInt, Local};
 use ast::{MacStmtWithBraces, MacStmtWithSemicolon, MacStmtWithoutBraces};
 use ast::{MutImmutable, MutMutable, Mac_, MacInvocTT, MatchSource};
 use ast::{MutTy, BiMul, Mutability};
@@ -51,6 +51,7 @@ use ast::{SelfExplicit, SelfRegion, SelfStatic, SelfValue};
 use ast::{Delimited, SequenceRepetition, TokenTree, TraitItem, TraitRef};
 use ast::{TtDelimited, TtSequence, TtToken};
 use ast::{TupleVariantKind, Ty, Ty_, TypeBinding};
+use ast::{TyMac};
 use ast::{TyFixedLengthVec, TyBareFn, TyTypeof, TyInfer};
 use ast::{TyParam, TyParamBound, TyParen, TyPath, TyPolyTraitRef, TyPtr};
 use ast::{TyRptr, TyTup, TyU32, TyVec, UnUniq};
@@ -288,7 +289,7 @@ impl TokenType {
         match *self {
             TokenType::Token(ref t) => format!("`{}`", Parser::token_to_string(t)),
             TokenType::Operator => "an operator".to_string(),
-            TokenType::Keyword(kw) => format!("`{}`", token::get_name(kw.to_name())),
+            TokenType::Keyword(kw) => format!("`{}`", kw.to_name()),
         }
     }
 }
@@ -681,7 +682,7 @@ impl<'a> Parser<'a> {
                 if text.is_empty() {
                     self.span_bug(sp, "found empty literal suffix in Some")
                 }
-                self.span_err(sp, &*format!("{} with a suffix is illegal", kind));
+                self.span_err(sp, &*format!("{} with a suffix is invalid", kind));
             }
         }
     }
@@ -1023,7 +1024,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn id_to_interned_str(&mut self, id: Ident) -> InternedString {
-        token::get_ident(id)
+        id.name.as_str()
     }
 
     /// Is the current token one of the keywords that signals a bare function
@@ -1369,8 +1370,20 @@ impl<'a> Parser<'a> {
         } else if self.check(&token::ModSep) ||
                   self.token.is_ident() ||
                   self.token.is_path() {
-            // NAMED TYPE
-            try!(self.parse_ty_path())
+            let path = try!(self.parse_path(LifetimeAndTypesWithoutColons));
+            if self.check(&token::Not) {
+                // MACRO INVOCATION
+                try!(self.bump());
+                let delim = try!(self.expect_open_delim());
+                let tts = try!(self.parse_seq_to_end(&token::CloseDelim(delim),
+                                                     seq_sep_none(),
+                                                     |p| p.parse_token_tree()));
+                let hi = self.span.hi;
+                TyMac(spanned(lo, hi, MacInvocTT(path, tts, EMPTY_CTXT)))
+            } else {
+                // NAMED TYPE
+                TyPath(None, path)
+            }
         } else if try!(self.eat(&token::Underscore) ){
             // TYPE TO BE INFERRED
             TyInfer
@@ -1498,20 +1511,20 @@ impl<'a> Parser<'a> {
             }
             token::Literal(lit, suf) => {
                 let (suffix_illegal, out) = match lit {
-                    token::Byte(i) => (true, LitByte(parse::byte_lit(i.as_str()).0)),
-                    token::Char(i) => (true, LitChar(parse::char_lit(i.as_str()).0)),
+                    token::Byte(i) => (true, LitByte(parse::byte_lit(&i.as_str()).0)),
+                    token::Char(i) => (true, LitChar(parse::char_lit(&i.as_str()).0)),
 
                     // there are some valid suffixes for integer and
                     // float literals, so all the handling is done
                     // internally.
                     token::Integer(s) => {
-                        (false, parse::integer_lit(s.as_str(),
+                        (false, parse::integer_lit(&s.as_str(),
                                                    suf.as_ref().map(|s| s.as_str()),
                                                    &self.sess.span_diagnostic,
                                                    self.last_span))
                     }
                     token::Float(s) => {
-                        (false, parse::float_lit(s.as_str(),
+                        (false, parse::float_lit(&s.as_str(),
                                                  suf.as_ref().map(|s| s.as_str()),
                                                   &self.sess.span_diagnostic,
                                                  self.last_span))
@@ -1519,20 +1532,20 @@ impl<'a> Parser<'a> {
 
                     token::Str_(s) => {
                         (true,
-                         LitStr(token::intern_and_get_ident(&parse::str_lit(s.as_str())),
+                         LitStr(token::intern_and_get_ident(&parse::str_lit(&s.as_str())),
                                 ast::CookedStr))
                     }
                     token::StrRaw(s, n) => {
                         (true,
                          LitStr(
-                            token::intern_and_get_ident(&parse::raw_str_lit(s.as_str())),
+                            token::intern_and_get_ident(&parse::raw_str_lit(&s.as_str())),
                             ast::RawStr(n)))
                     }
                     token::Binary(i) =>
-                        (true, LitBinary(parse::binary_lit(i.as_str()))),
+                        (true, LitBinary(parse::binary_lit(&i.as_str()))),
                     token::BinaryRaw(i, _) =>
                         (true,
-                         LitBinary(Rc::new(i.as_str().as_bytes().iter().cloned().collect()))),
+                         LitBinary(Rc::new(i.to_string().into_bytes()))),
                 };
 
                 if suffix_illegal {
@@ -2099,28 +2112,32 @@ impl<'a> Parser<'a> {
                     return self.parse_if_expr();
                 }
                 if try!(self.eat_keyword(keywords::For) ){
-                    return self.parse_for_expr(None);
+                    let lo = self.last_span.lo;
+                    return self.parse_for_expr(None, lo);
                 }
                 if try!(self.eat_keyword(keywords::While) ){
-                    return self.parse_while_expr(None);
+                    let lo = self.last_span.lo;
+                    return self.parse_while_expr(None, lo);
                 }
                 if self.token.is_lifetime() {
                     let lifetime = self.get_lifetime();
+                    let lo = self.span.lo;
                     try!(self.bump());
                     try!(self.expect(&token::Colon));
                     if try!(self.eat_keyword(keywords::While) ){
-                        return self.parse_while_expr(Some(lifetime))
+                        return self.parse_while_expr(Some(lifetime), lo)
                     }
                     if try!(self.eat_keyword(keywords::For) ){
-                        return self.parse_for_expr(Some(lifetime))
+                        return self.parse_for_expr(Some(lifetime), lo)
                     }
                     if try!(self.eat_keyword(keywords::Loop) ){
-                        return self.parse_loop_expr(Some(lifetime))
+                        return self.parse_loop_expr(Some(lifetime), lo)
                     }
                     return Err(self.fatal("expected `while`, `for`, or `loop` after a label"))
                 }
                 if try!(self.eat_keyword(keywords::Loop) ){
-                    return self.parse_loop_expr(None);
+                    let lo = self.last_span.lo;
+                    return self.parse_loop_expr(None, lo);
                 }
                 if try!(self.eat_keyword(keywords::Continue) ){
                     let lo = self.span.lo;
@@ -2444,7 +2461,7 @@ impl<'a> Parser<'a> {
             match self.token {
                 token::SubstNt(name, _) =>
                     return Err(self.fatal(&format!("unknown macro variable `{}`",
-                                       token::get_ident(name)))),
+                                       name))),
                 _ => {}
             }
         }
@@ -2608,19 +2625,40 @@ impl<'a> Parser<'a> {
             ex = ExprAddrOf(m, e);
           }
           token::Ident(_, _) => {
-            if !self.check_keyword(keywords::Box) {
+            if !self.check_keyword(keywords::Box) && !self.check_keyword(keywords::In) {
                 return self.parse_dot_or_call_expr();
             }
 
             let lo = self.span.lo;
-            let box_hi = self.span.hi;
+            let keyword_hi = self.span.hi;
 
+            let is_in = self.token.is_keyword(keywords::In);
             try!(self.bump());
 
-            // Check for a place: `box(PLACE) EXPR`.
-            if try!(self.eat(&token::OpenDelim(token::Paren)) ){
-                // Support `box() EXPR` as the default.
-                if !try!(self.eat(&token::CloseDelim(token::Paren)) ){
+            if is_in {
+              let place = try!(self.parse_expr_res(Restrictions::RESTRICTION_NO_STRUCT_LITERAL));
+              let blk = try!(self.parse_block());
+              hi = blk.span.hi;
+              let blk_expr = self.mk_expr(blk.span.lo, blk.span.hi, ExprBlock(blk));
+              ex = ExprBox(Some(place), blk_expr);
+              return Ok(self.mk_expr(lo, hi, ex));
+            }
+
+            // FIXME (#22181) Remove `box (PLACE) EXPR` support
+            // entirely after next release (enabling `(box (EXPR))`),
+            // since it will be replaced by `in PLACE { EXPR }`, ...
+            //
+            // ... but for now: check for a place: `box(PLACE) EXPR`.
+
+            if try!(self.eat(&token::OpenDelim(token::Paren))) {
+                let box_span = mk_sp(lo, self.last_span.hi);
+                self.span_warn(box_span,
+                    "deprecated syntax; use the `in` keyword now \
+                           (e.g. change `box (<expr>) <expr>` to \
+                                        `in <expr> { <expr> }`)");
+
+                // Continue supporting `box () EXPR` (temporarily)
+                if !try!(self.eat(&token::CloseDelim(token::Paren))) {
                     let place = try!(self.parse_expr_nopanic());
                     try!(self.expect(&token::CloseDelim(token::Paren)));
                     // Give a suggestion to use `box()` when a parenthesised expression is used
@@ -2630,10 +2668,15 @@ impl<'a> Parser<'a> {
                         self.span_err(span,
                                       &format!("expected expression, found `{}`",
                                               this_token_to_string));
-                        let box_span = mk_sp(lo, box_hi);
+
+                        // Spanning just keyword avoids constructing
+                        // printout of arg expression (which starts
+                        // with parenthesis, as established above).
+
+                        let box_span = mk_sp(lo, keyword_hi);
                         self.span_suggestion(box_span,
-                                             "try using `box()` instead:",
-                                             "box()".to_string());
+                                             "try using `box ()` instead:",
+                                             format!("box ()"));
                         self.abort_if_errors();
                     }
                     let subexpression = try!(self.parse_prefix_expr());
@@ -2646,6 +2689,7 @@ impl<'a> Parser<'a> {
             // Otherwise, we use the unique pointer default.
             let subexpression = try!(self.parse_prefix_expr());
             hi = subexpression.span.hi;
+
             // FIXME (pnkfelix): After working out kinks with box
             // desugaring, should be `ExprBox(None, subexpression)`
             // instead.
@@ -2734,14 +2778,15 @@ impl<'a> Parser<'a> {
             // (much lower than other prefix expressions) to be consistent
             // with the postfix-form 'expr..'
             let lo = self.span.lo;
+            let mut hi = self.span.hi;
             try!(self.bump());
             let opt_end = if self.is_at_start_of_range_notation_rhs() {
                 let end = try!(self.parse_binops());
+                hi = end.span.hi;
                 Some(end)
             } else {
                 None
             };
-            let hi = self.span.hi;
             let ex = self.mk_range(None, opt_end);
             Ok(self.mk_expr(lo, hi, ex))
           }
@@ -2783,17 +2828,17 @@ impl<'a> Parser<'a> {
           }
           // A range expression, either `expr..expr` or `expr..`.
           token::DotDot => {
+            let lo = lhs.span.lo;
+            let mut hi = self.span.hi;
             try!(self.bump());
 
             let opt_end = if self.is_at_start_of_range_notation_rhs() {
                 let end = try!(self.parse_binops());
+                hi = end.span.hi;
                 Some(end)
             } else {
                 None
             };
-
-            let lo = lhs.span.lo;
-            let hi = self.span.hi;
             let range = self.mk_range(Some(lhs), opt_end);
             return Ok(self.mk_expr(lo, hi, range));
           }
@@ -2892,48 +2937,48 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a 'for' .. 'in' expression ('for' token already eaten)
-    pub fn parse_for_expr(&mut self, opt_ident: Option<ast::Ident>) -> PResult<P<Expr>> {
+    pub fn parse_for_expr(&mut self, opt_ident: Option<ast::Ident>,
+                          span_lo: BytePos) -> PResult<P<Expr>> {
         // Parse: `for <src_pat> in <src_expr> <src_loop_block>`
 
-        let lo = self.last_span.lo;
         let pat = try!(self.parse_pat_nopanic());
         try!(self.expect_keyword(keywords::In));
         let expr = try!(self.parse_expr_res(Restrictions::RESTRICTION_NO_STRUCT_LITERAL));
         let loop_block = try!(self.parse_block());
         let hi = self.last_span.hi;
 
-        Ok(self.mk_expr(lo, hi, ExprForLoop(pat, expr, loop_block, opt_ident)))
+        Ok(self.mk_expr(span_lo, hi, ExprForLoop(pat, expr, loop_block, opt_ident)))
     }
 
     /// Parse a 'while' or 'while let' expression ('while' token already eaten)
-    pub fn parse_while_expr(&mut self, opt_ident: Option<ast::Ident>) -> PResult<P<Expr>> {
+    pub fn parse_while_expr(&mut self, opt_ident: Option<ast::Ident>,
+                            span_lo: BytePos) -> PResult<P<Expr>> {
         if self.token.is_keyword(keywords::Let) {
-            return self.parse_while_let_expr(opt_ident);
+            return self.parse_while_let_expr(opt_ident, span_lo);
         }
-        let lo = self.last_span.lo;
         let cond = try!(self.parse_expr_res(Restrictions::RESTRICTION_NO_STRUCT_LITERAL));
         let body = try!(self.parse_block());
         let hi = body.span.hi;
-        return Ok(self.mk_expr(lo, hi, ExprWhile(cond, body, opt_ident)));
+        return Ok(self.mk_expr(span_lo, hi, ExprWhile(cond, body, opt_ident)));
     }
 
     /// Parse a 'while let' expression ('while' token already eaten)
-    pub fn parse_while_let_expr(&mut self, opt_ident: Option<ast::Ident>) -> PResult<P<Expr>> {
-        let lo = self.last_span.lo;
+    pub fn parse_while_let_expr(&mut self, opt_ident: Option<ast::Ident>,
+                                span_lo: BytePos) -> PResult<P<Expr>> {
         try!(self.expect_keyword(keywords::Let));
         let pat = try!(self.parse_pat_nopanic());
         try!(self.expect(&token::Eq));
         let expr = try!(self.parse_expr_res(Restrictions::RESTRICTION_NO_STRUCT_LITERAL));
         let body = try!(self.parse_block());
         let hi = body.span.hi;
-        return Ok(self.mk_expr(lo, hi, ExprWhileLet(pat, expr, body, opt_ident)));
+        return Ok(self.mk_expr(span_lo, hi, ExprWhileLet(pat, expr, body, opt_ident)));
     }
 
-    pub fn parse_loop_expr(&mut self, opt_ident: Option<ast::Ident>) -> PResult<P<Expr>> {
-        let lo = self.last_span.lo;
+    pub fn parse_loop_expr(&mut self, opt_ident: Option<ast::Ident>,
+                           span_lo: BytePos) -> PResult<P<Expr>> {
         let body = try!(self.parse_block());
         let hi = body.span.hi;
-        Ok(self.mk_expr(lo, hi, ExprLoop(body, opt_ident)))
+        Ok(self.mk_expr(span_lo, hi, ExprLoop(body, opt_ident)))
     }
 
     fn parse_match_expr(&mut self) -> PResult<P<Expr>> {
@@ -3396,7 +3441,6 @@ impl<'a> Parser<'a> {
             init: init,
             id: ast::DUMMY_NODE_ID,
             span: mk_sp(lo, self.last_span.hi),
-            source: LocalLet,
         }))
     }
 
@@ -4579,7 +4623,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        if try!(self.eat(&token::DotDot) ){
+        if opt_trait.is_some() && try!(self.eat(&token::DotDot) ){
             if generics.is_parameterized() {
                 self.span_err(impl_span, "default trait implementations are not \
                                           allowed to have generics");
@@ -4705,7 +4749,7 @@ impl<'a> Parser<'a> {
             if fields.is_empty() {
                 return Err(self.fatal(&format!("unit-like struct definition should be \
                     written as `struct {};`",
-                    token::get_ident(class_name.clone()))));
+                    class_name)));
             }
 
             try!(self.bump());
@@ -4744,7 +4788,7 @@ impl<'a> Parser<'a> {
             if fields.is_empty() {
                 return Err(self.fatal(&format!("unit-like struct definition should be \
                     written as `struct {};`",
-                    token::get_ident(class_name.clone()))));
+                    class_name)));
             }
 
             generics.where_clause = try!(self.parse_where_clause());
@@ -4820,8 +4864,14 @@ impl<'a> Parser<'a> {
             return Err(self.fatal(&format!("expected item, found `{}`", token_str)));
         }
 
+        let hi = if self.span == codemap::DUMMY_SP {
+            inner_lo
+        } else {
+            self.span.lo
+        };
+
         Ok(ast::Mod {
-            inner: mk_sp(inner_lo, self.span.lo),
+            inner: mk_sp(inner_lo, hi),
             items: items
         })
     }
@@ -4865,8 +4915,7 @@ impl<'a> Parser<'a> {
 
     fn push_mod_path(&mut self, id: Ident, attrs: &[Attribute]) {
         let default_path = self.id_to_interned_str(id);
-        let file_path = match ::attr::first_attr_value_str_by_name(attrs,
-                                                                   "path") {
+        let file_path = match ::attr::first_attr_value_str_by_name(attrs, "path") {
             Some(d) => d,
             None => default_path,
         };
@@ -4884,8 +4933,7 @@ impl<'a> Parser<'a> {
     /// Returns either a path to a module, or .
     pub fn default_submod_path(id: ast::Ident, dir_path: &Path, codemap: &CodeMap) -> ModulePath
     {
-        let mod_string = token::get_ident(id);
-        let mod_name = mod_string.to_string();
+        let mod_name = id.to_string();
         let default_path_str = format!("{}.rs", mod_name);
         let secondary_path_str = format!("{}/mod.rs", mod_name);
         let default_path = dir_path.join(&default_path_str);
@@ -4973,7 +5021,7 @@ impl<'a> Parser<'a> {
 
         self.eval_src_mod_from_path(path,
                                     owns_directory,
-                                    token::get_ident(id).to_string(),
+                                    id.to_string(),
                                     id_sp)
     }
 
@@ -4999,13 +5047,12 @@ impl<'a> Parser<'a> {
         included_mod_stack.push(path.clone());
         drop(included_mod_stack);
 
-        let mut p0 =
-            new_sub_parser_from_file(self.sess,
-                                     self.cfg.clone(),
-                                     &path,
-                                     owns_directory,
-                                     Some(name),
-                                     id_sp);
+        let mut p0 = new_sub_parser_from_file(self.sess,
+                                              self.cfg.clone(),
+                                              &path,
+                                              owns_directory,
+                                              Some(name),
+                                              id_sp);
         let mod_inner_lo = p0.span.lo;
         let mod_attrs = p0.parse_inner_attributes();
         let m0 = try!(p0.parse_mod_items(&token::Eof, mod_inner_lo));
@@ -5178,7 +5225,7 @@ impl<'a> Parser<'a> {
                     self.span_err(start_span,
                         &format!("unit-like struct variant should be written \
                                  without braces, as `{},`",
-                                token::get_ident(ident)));
+                                ident));
                 }
                 kind = StructVariantKind(struct_def);
             } else if self.check(&token::OpenDelim(token::Paren)) {
@@ -5246,17 +5293,16 @@ impl<'a> Parser<'a> {
                 let sp = self.span;
                 self.expect_no_suffix(sp, "ABI spec", suf);
                 try!(self.bump());
-                let the_string = s.as_str();
-                match abi::lookup(the_string) {
+                match abi::lookup(&s.as_str()) {
                     Some(abi) => Ok(Some(abi)),
                     None => {
                         let last_span = self.last_span;
                         self.span_err(
                             last_span,
-                            &format!("illegal ABI: expected one of [{}], \
+                            &format!("invalid ABI: expected one of [{}], \
                                      found `{}`",
                                     abi::all_names().join(", "),
-                                    the_string));
+                                    s));
                         Ok(None)
                     }
                 }

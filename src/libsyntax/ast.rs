@@ -29,7 +29,6 @@ pub use self::Item_::*;
 pub use self::KleeneOp::*;
 pub use self::Lit_::*;
 pub use self::LitIntType::*;
-pub use self::LocalSource::*;
 pub use self::Mac_::*;
 pub use self::MacStmtStyle::*;
 pub use self::MetaItem_::*;
@@ -63,6 +62,7 @@ use owned_slice::OwnedSlice;
 use parse::token::{InternedString, str_to_ident};
 use parse::token;
 use parse::lexer;
+use parse::lexer::comments::{doc_comment_style, strip_doc_comment_decoration};
 use print::pprust;
 use ptr::P;
 
@@ -87,10 +87,6 @@ pub struct Ident {
 impl Ident {
     /// Construct an identifier with the given name and an empty context:
     pub fn new(name: Name) -> Ident { Ident {name: name, ctxt: EMPTY_CTXT}}
-
-    pub fn as_str<'a>(&'a self) -> &'a str {
-        self.name.as_str()
-    }
 }
 
 impl fmt::Debug for Ident {
@@ -108,13 +104,13 @@ impl fmt::Display for Ident {
 impl fmt::Debug for Name {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let Name(nm) = *self;
-        write!(f, "{:?}({})", token::get_name(*self), nm)
+        write!(f, "{}({})", self, nm)
     }
 }
 
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(&token::get_name(*self), f)
+        fmt::Display::fmt(&self.as_str(), f)
     }
 }
 
@@ -134,12 +130,9 @@ impl PartialEq for Ident {
             // one example and its non-hygienic counterpart would be:
             //      syntax::parse::token::Token::mtwt_eq
             //      syntax::ext::tt::macro_parser::token_name_eq
-            panic!("not allowed to compare these idents: {}, {}. \
+            panic!("not allowed to compare these idents: {:?}, {:?}. \
                    Probably related to issue \\#6993", self, other);
         }
-    }
-    fn ne(&self, other: &Ident) -> bool {
-        ! self.eq(other)
     }
 }
 
@@ -166,12 +159,15 @@ pub const ILLEGAL_CTXT : SyntaxContext = 1;
            RustcEncodable, RustcDecodable, Clone, Copy)]
 pub struct Name(pub u32);
 
+impl<T: AsRef<str>> PartialEq<T> for Name {
+    fn eq(&self, other: &T) -> bool {
+        self.as_str() == other.as_ref()
+    }
+}
+
 impl Name {
-    pub fn as_str<'a>(&'a self) -> &'a str {
-        unsafe {
-            // FIXME #12938: can't use copy_lifetime since &str isn't a &T
-            ::std::mem::transmute::<&str,&str>(&token::get_name(*self))
-        }
+    pub fn as_str(&self) -> token::InternedString {
+        token::InternedString::new_from_name(*self)
     }
 
     pub fn usize(&self) -> usize {
@@ -189,7 +185,7 @@ pub type Mrk = u32;
 
 impl Encodable for Ident {
     fn encode<S: Encoder>(&self, s: &mut S) -> Result<(), S::Error> {
-        s.emit_str(&token::get_ident(*self))
+        s.emit_str(&self.name.as_str())
     }
 }
 
@@ -755,14 +751,6 @@ pub enum MacStmtStyle {
     MacStmtWithoutBraces,
 }
 
-/// Where a local declaration came from: either a true `let ... =
-/// ...;`, or one desugared from the pattern of a for loop.
-#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
-pub enum LocalSource {
-    LocalLet,
-    LocalFor,
-}
-
 // FIXME (pending discussion of #1697, #2178...): local should really be
 // a refinement on pat.
 /// Local represents a `let` statement, e.g., `let <pat>:<ty> = <expr>;`
@@ -774,7 +762,6 @@ pub struct Local {
     pub init: Option<P<Expr>>,
     pub id: NodeId,
     pub span: Span,
-    pub source: LocalSource,
 }
 
 pub type Decl = Spanned<Decl_>;
@@ -809,6 +796,8 @@ pub type SpannedIdent = Spanned<Ident>;
 pub enum BlockCheckMode {
     DefaultBlock,
     UnsafeBlock(UnsafeSource),
+    PushUnsafeBlock(UnsafeSource),
+    PopUnsafeBlock(UnsafeSource),
 }
 
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
@@ -1079,7 +1068,12 @@ pub enum TokenTree {
 impl TokenTree {
     pub fn len(&self) -> usize {
         match *self {
-            TtToken(_, token::DocComment(_)) => 2,
+            TtToken(_, token::DocComment(name)) => {
+                match doc_comment_style(&name.as_str()) {
+                    AttrOuter => 2,
+                    AttrInner => 3
+                }
+            }
             TtToken(_, token::SpecialVarNt(..)) => 2,
             TtToken(_, token::MatchNt(..)) => 3,
             TtDelimited(_, ref delimed) => {
@@ -1097,14 +1091,20 @@ impl TokenTree {
             (&TtToken(sp, token::DocComment(_)), 0) => {
                 TtToken(sp, token::Pound)
             }
-            (&TtToken(sp, token::DocComment(name)), 1) => {
+            (&TtToken(sp, token::DocComment(name)), 1)
+            if doc_comment_style(&name.as_str()) == AttrInner => {
+                TtToken(sp, token::Not)
+            }
+            (&TtToken(sp, token::DocComment(name)), _) => {
+                let stripped = strip_doc_comment_decoration(&name.as_str());
                 TtDelimited(sp, Rc::new(Delimited {
                     delim: token::Bracket,
                     open_span: sp,
                     tts: vec![TtToken(sp, token::Ident(token::str_to_ident("doc"),
                                                        token::Plain)),
                               TtToken(sp, token::Eq),
-                              TtToken(sp, token::Literal(token::StrRaw(name, 0), None))],
+                              TtToken(sp, token::Literal(
+                                  token::StrRaw(token::intern(&stripped), 0), None))],
                     close_span: sp,
                 }))
             }
@@ -1471,6 +1471,8 @@ pub enum Ty_ {
     /// TyInfer means the type should be inferred instead of it having been
     /// specified. This can appear anywhere in a type.
     TyInfer,
+    // A macro in the type position.
+    TyMac(Mac)
 }
 
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]

@@ -23,6 +23,8 @@ use middle::const_eval::{const_int_checked_div, const_uint_checked_div};
 use middle::const_eval::{const_int_checked_rem, const_uint_checked_rem};
 use middle::const_eval::{const_int_checked_shl, const_uint_checked_shl};
 use middle::const_eval::{const_int_checked_shr, const_uint_checked_shr};
+use middle::const_eval::EvalHint::ExprTypeChecked;
+use middle::const_eval::eval_const_expr_partial;
 use trans::{adt, closure, debuginfo, expr, inline, machine};
 use trans::base::{self, push_ctxt};
 use trans::common::*;
@@ -35,8 +37,9 @@ use middle::subst::Substs;
 use middle::ty::{self, Ty};
 use util::nodemap::NodeMap;
 
+use std::ffi::{CStr, CString};
 use libc::c_uint;
-use syntax::{ast, ast_util};
+use syntax::{ast, ast_util, attr};
 use syntax::parse::token;
 use syntax::ptr::P;
 
@@ -226,7 +229,7 @@ pub fn get_const_expr_as_global<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
         ast::ExprPath(..) => {
             let def = ccx.tcx().def_map.borrow().get(&expr.id).unwrap().full_def();
             match def {
-                def::DefConst(def_id) | def::DefAssociatedConst(def_id, _) => {
+                def::DefConst(def_id) | def::DefAssociatedConst(def_id) => {
                     if !ccx.tcx().tables.borrow().adjustments.contains_key(&expr.id) {
                         debug!("get_const_expr_as_global ({:?}): found const {:?}",
                                expr.id, def_id);
@@ -497,7 +500,7 @@ fn const_expr_unadjusted<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
             debug!("const_expr_unadjusted: te1={}, ty={:?}",
                    cx.tn().val_to_string(te1),
                    ty);
-            let is_simd = ty.is_simd(cx.tcx());
+            let is_simd = ty.is_simd();
             let intype = if is_simd {
                 ty.simd_type(cx.tcx())
             } else {
@@ -576,22 +579,20 @@ fn const_expr_unadjusted<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
         ast::ExprField(ref base, field) => {
             let (bv, bt) = const_expr(cx, &**base, param_substs, fn_args);
             let brepr = adt::represent_type(cx, bt);
-            expr::with_field_tys(cx.tcx(), bt, None, |discr, field_tys| {
-                let ix = cx.tcx().field_idx_strict(field.node.name, field_tys);
-                adt::const_get_field(cx, &*brepr, bv, discr, ix)
-            })
+            let vinfo = VariantInfo::from_ty(cx.tcx(), bt, None);
+            let ix = vinfo.field_index(field.node.name);
+            adt::const_get_field(cx, &*brepr, bv, vinfo.discr, ix)
         },
         ast::ExprTupField(ref base, idx) => {
             let (bv, bt) = const_expr(cx, &**base, param_substs, fn_args);
             let brepr = adt::represent_type(cx, bt);
-            expr::with_field_tys(cx.tcx(), bt, None, |discr, _| {
-                adt::const_get_field(cx, &*brepr, bv, discr, idx.node)
-            })
+            let vinfo = VariantInfo::from_ty(cx.tcx(), bt, None);
+            adt::const_get_field(cx, &*brepr, bv, vinfo.discr, idx.node)
         },
 
         ast::ExprIndex(ref base, ref index) => {
             let (bv, bt) = const_expr(cx, &**base, param_substs, fn_args);
-            let iv = match const_eval::eval_const_expr_partial(cx.tcx(), &**index, None) {
+            let iv = match eval_const_expr_partial(cx.tcx(), &index, ExprTypeChecked) {
                 Ok(ConstVal::Int(i)) => i as u64,
                 Ok(ConstVal::Uint(u)) => u,
                 _ => cx.sess().span_bug(index.span,
@@ -661,8 +662,8 @@ fn const_expr_unadjusted<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
                 }
             }
             unsafe { match (
-                CastTy::from_ty(cx.tcx(), t_expr).expect("bad input type for cast"),
-                CastTy::from_ty(cx.tcx(), t_cast).expect("bad output type for cast"),
+                CastTy::from_ty(t_expr).expect("bad input type for cast"),
+                CastTy::from_ty(t_cast).expect("bad output type for cast"),
             ) {
                 (CastTy::Int(IntTy::CEnum), CastTy::Int(_)) => {
                     let repr = adt::represent_type(cx, t_expr);
@@ -745,21 +746,19 @@ fn const_expr_unadjusted<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
                 None => None
             };
 
-            expr::with_field_tys(cx.tcx(), ety, Some(e.id), |discr, field_tys| {
-                let cs = field_tys.iter().enumerate()
-                                  .map(|(ix, &field_ty)| {
-                    match (fs.iter().find(|f| field_ty.name == f.ident.node.name), base_val) {
-                        (Some(ref f), _) => const_expr(cx, &*f.expr, param_substs, fn_args).0,
-                        (_, Some((bv, _))) => adt::const_get_field(cx, &*repr, bv, discr, ix),
-                        (_, None) => cx.sess().span_bug(e.span, "missing struct field"),
-                    }
-                }).collect::<Vec<_>>();
-                if ety.is_simd(cx.tcx()) {
-                    C_vector(&cs[..])
-                } else {
-                    adt::trans_const(cx, &*repr, discr, &cs[..])
+            let VariantInfo { discr, fields } = VariantInfo::of_node(cx.tcx(), ety, e.id);
+            let cs = fields.iter().enumerate().map(|(ix, &Field(f_name, _))| {
+                match (fs.iter().find(|f| f_name == f.ident.node.name), base_val) {
+                    (Some(ref f), _) => const_expr(cx, &*f.expr, param_substs, fn_args).0,
+                    (_, Some((bv, _))) => adt::const_get_field(cx, &*repr, bv, discr, ix),
+                    (_, None) => cx.sess().span_bug(e.span, "missing struct field"),
                 }
-            })
+            }).collect::<Vec<_>>();
+            if ety.is_simd() {
+                C_vector(&cs[..])
+            } else {
+                adt::trans_const(cx, &*repr, discr, &cs[..])
+            }
         },
         ast::ExprVec(ref es) => {
             let unit_ty = ety.sequence_element_type(cx.tcx());
@@ -799,18 +798,22 @@ fn const_expr_unadjusted<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
                 def::DefFn(..) | def::DefMethod(..) => {
                     expr::trans_def_fn_unadjusted(cx, e, def, param_substs).val
                 }
-                def::DefConst(def_id) | def::DefAssociatedConst(def_id, _) => {
+                def::DefConst(def_id) | def::DefAssociatedConst(def_id) => {
                     const_deref_ptr(cx, get_const_val(cx, def_id, e))
                 }
                 def::DefVariant(enum_did, variant_did, _) => {
-                    let vinfo = cx.tcx().enum_variant_with_id(enum_did, variant_did);
-                    if !vinfo.args.is_empty() {
-                        // N-ary variant.
-                        expr::trans_def_fn_unadjusted(cx, e, def, param_substs).val
-                    } else {
-                        // Nullary variant.
-                        let repr = adt::represent_type(cx, ety);
-                        adt::trans_const(cx, &*repr, vinfo.disr_val, &[])
+                    let vinfo = cx.tcx().lookup_adt_def(enum_did).variant_with_id(variant_did);
+                    match vinfo.kind() {
+                        ty::VariantKind::Unit => {
+                            let repr = adt::represent_type(cx, ety);
+                            adt::trans_const(cx, &*repr, vinfo.disr_val, &[])
+                        }
+                        ty::VariantKind::Tuple => {
+                            expr::trans_def_fn_unadjusted(cx, e, def, param_substs).val
+                        }
+                        ty::VariantKind::Dict => {
+                            cx.sess().span_bug(e.span, "path-expr refers to a dict variant!")
+                        }
                     }
                 }
                 def::DefStruct(_) => {
@@ -843,32 +846,32 @@ fn const_expr_unadjusted<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
             let def = cx.tcx().def_map.borrow()[&callee.id].full_def();
             let arg_vals = map_list(args);
             match def {
-                def::DefFn(did, _) | def::DefMethod(did, _) => {
+                def::DefFn(did, _) | def::DefMethod(did) => {
                     const_fn_call(cx, ExprId(callee.id), did, &arg_vals, param_substs)
-                },
+                }
                 def::DefStruct(_) => {
-                    if ety.is_simd(cx.tcx()) {
+                    if ety.is_simd() {
                         C_vector(&arg_vals[..])
                     } else {
                         let repr = adt::represent_type(cx, ety);
                         adt::trans_const(cx, &*repr, 0, &arg_vals[..])
                     }
-                },
+                }
                 def::DefVariant(enum_did, variant_did, _) => {
                     let repr = adt::represent_type(cx, ety);
-                    let vinfo = cx.tcx().enum_variant_with_id(enum_did, variant_did);
+                    let vinfo = cx.tcx().lookup_adt_def(enum_did).variant_with_id(variant_did);
                     adt::trans_const(cx,
                                      &*repr,
                                      vinfo.disr_val,
                                      &arg_vals[..])
-                },
+                }
                 _ => cx.sess().span_bug(e.span, "expected a struct, variant, or const fn def"),
             }
         },
         ast::ExprMethodCall(_, _, ref args) => {
             let arg_vals = map_list(args);
             let method_call = ty::MethodCall::expr(e.id);
-              let method_did = cx.tcx().tables.borrow().method_map[&method_call].def_id;
+            let method_did = cx.tcx().tables.borrow().method_map[&method_call].def_id;
             const_fn_call(cx, MethodCallKey(method_call),
                           method_did, &arg_vals, param_substs)
         },
@@ -880,47 +883,85 @@ fn const_expr_unadjusted<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
             }
         },
         ast::ExprClosure(_, ref decl, ref body) => {
-            closure::trans_closure_expr(closure::Dest::Ignore(cx),
-                                        decl,
-                                        body,
-                                        e.id,
-                                        param_substs);
+            match ety.sty {
+                ty::TyClosure(_, ref substs) => {
+                    closure::trans_closure_expr(closure::Dest::Ignore(cx), decl,
+                                                body, e.id, substs);
+                }
+                _ =>
+                    cx.sess().span_bug(
+                        e.span,
+                        &format!("bad type for closure expr: {:?}", ety))
+            }
             C_null(type_of::type_of(cx, ety))
         },
         _ => cx.sess().span_bug(e.span,
                                 "bad constant expression type in consts::const_expr"),
     }
 }
-
-pub fn trans_static(ccx: &CrateContext, m: ast::Mutability, id: ast::NodeId) -> ValueRef {
+pub fn trans_static(ccx: &CrateContext,
+                    m: ast::Mutability,
+                    expr: &ast::Expr,
+                    id: ast::NodeId,
+                    attrs: &Vec<ast::Attribute>)
+                    -> ValueRef {
     unsafe {
         let _icx = push_ctxt("trans_static");
         let g = base::get_item_val(ccx, id);
-        // At this point, get_item_val has already translated the
-        // constant's initializer to determine its LLVM type.
-        let v = ccx.static_values().borrow().get(&id).unwrap().clone();
+
+        let empty_substs = ccx.tcx().mk_substs(Substs::trans_empty());
+        let (v, _) = const_expr(ccx, expr, empty_substs, None);
+
         // boolean SSA values are i1, but they have to be stored in i8 slots,
         // otherwise some LLVM optimization passes don't work as expected
-        let v = if llvm::LLVMTypeOf(v) == Type::i1(ccx).to_ref() {
-            llvm::LLVMConstZExt(v, Type::i8(ccx).to_ref())
+        let mut val_llty = llvm::LLVMTypeOf(v);
+        let v = if val_llty == Type::i1(ccx).to_ref() {
+            val_llty = Type::i8(ccx).to_ref();
+            llvm::LLVMConstZExt(v, val_llty)
         } else {
             v
+        };
+
+        let ty = ccx.tcx().node_id_to_type(id);
+        let llty = type_of::type_of(ccx, ty);
+        let g = if val_llty == llty.to_ref() {
+            g
+        } else {
+            // If we created the global with the wrong type,
+            // correct the type.
+            let empty_string = CString::new("").unwrap();
+            let name_str_ref = CStr::from_ptr(llvm::LLVMGetValueName(g));
+            let name_string = CString::new(name_str_ref.to_bytes()).unwrap();
+            llvm::LLVMSetValueName(g, empty_string.as_ptr());
+            let new_g = llvm::LLVMGetOrInsertGlobal(
+                ccx.llmod(), name_string.as_ptr(), val_llty);
+            // To avoid breaking any invariants, we leave around the old
+            // global for the moment; we'll replace all references to it
+            // with the new global later. (See base::trans_crate.)
+            ccx.statics_to_rauw().borrow_mut().push((g, new_g));
+            new_g
         };
         llvm::LLVMSetInitializer(g, v);
 
         // As an optimization, all shared statics which do not have interior
         // mutability are placed into read-only memory.
         if m != ast::MutMutable {
-            let node_ty = ccx.tcx().node_id_to_type(id);
-            let tcontents = node_ty.type_contents(ccx.tcx());
+            let tcontents = ty.type_contents(ccx.tcx());
             if !tcontents.interior_unsafe() {
-                llvm::LLVMSetGlobalConstant(g, True);
+                llvm::LLVMSetGlobalConstant(g, llvm::True);
             }
         }
+
         debuginfo::create_global_var_metadata(ccx, id, g);
+
+        if attr::contains_name(attrs,
+                               "thread_local") {
+            llvm::set_thread_local(g, true);
+        }
         g
     }
 }
+
 
 fn get_static_val<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, did: ast::DefId,
                             ty: Ty<'tcx>) -> ValueRef {

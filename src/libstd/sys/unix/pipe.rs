@@ -8,6 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[cfg(stage0)]
 use prelude::v1::*;
 
 use sys::fd::FileDesc;
@@ -46,4 +47,5 @@ impl AnonPipe {
 
     pub fn raw(&self) -> libc::c_int { self.0.raw() }
     pub fn fd(&self) -> &FileDesc { &self.0 }
+    pub fn into_fd(self) -> FileDesc { self.0 }
 }

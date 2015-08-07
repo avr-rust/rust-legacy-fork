@@ -8,15 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Character manipulation (`char` type, Unicode Scalar Value)
+//! A Unicode scalar value
 //!
 //! This module provides the `CharExt` trait, as well as its
 //! implementation for the primitive `char` type, in order to allow
 //! basic character manipulation.
 //!
-//! A `char` actually represents a
-//! *[Unicode Scalar
-//! Value](http://www.unicode.org/glossary/#unicode_scalar_value)*, as it can
+//! A `char` represents a
+//! *[Unicode scalar
+//! value](http://www.unicode.org/glossary/#unicode_scalar_value)*, as it can
 //! contain any Unicode code point except high-surrogate and low-surrogate code
 //! points.
 //!
@@ -24,9 +24,10 @@
 //! (inclusive) are allowed. A `char` can always be safely cast to a `u32`;
 //! however the converse is not always true due to the above range limits
 //! and, as such, should be performed via the `from_u32` function.
+//!
+//! *[See also the `char` primitive type](../primitive.char.html).*
 
 #![stable(feature = "rust1", since = "1.0.0")]
-#![doc(primitive = "char")]
 
 use core::char::CharExt as C;
 use core::option::Option::{self, Some, None};
@@ -34,7 +35,7 @@ use core::iter::Iterator;
 use tables::{derived_property, property, general_category, conversions, charwidth};
 
 // stable reexports
-pub use core::char::{MAX, from_u32, from_digit, EscapeUnicode, EscapeDefault};
+pub use core::char::{MAX, from_u32, from_u32_unchecked, from_digit, EscapeUnicode, EscapeDefault};
 
 // unstable reexports
 #[allow(deprecated)]
@@ -277,7 +278,8 @@ impl char {
     /// In both of these examples, 'ß' takes two bytes to encode.
     ///
     /// ```
-    /// # #![feature(unicode)]
+    /// #![feature(unicode)]
+    ///
     /// let mut b = [0; 2];
     ///
     /// let result = 'ß'.encode_utf8(&mut b);
@@ -288,7 +290,8 @@ impl char {
     /// A buffer that's too small:
     ///
     /// ```
-    /// # #![feature(unicode)]
+    /// #![feature(unicode)]
+    ///
     /// let mut b = [0; 1];
     ///
     /// let result = 'ß'.encode_utf8(&mut b);
@@ -314,7 +317,8 @@ impl char {
     /// In both of these examples, 'ß' takes one `u16` to encode.
     ///
     /// ```
-    /// # #![feature(unicode)]
+    /// #![feature(unicode)]
+    ///
     /// let mut b = [0; 1];
     ///
     /// let result = 'ß'.encode_utf16(&mut b);
@@ -325,7 +329,8 @@ impl char {
     /// A buffer that's too small:
     ///
     /// ```
-    /// # #![feature(unicode)]
+    /// #![feature(unicode)]
+    ///
     /// let mut b = [0; 0];
     ///
     /// let result = 'ß'.encode_utf8(&mut b);

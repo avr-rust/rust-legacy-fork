@@ -53,16 +53,21 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
+
+use heap;
+use raw_vec::RawVec;
 
 use core::any::Any;
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{self, Hash};
-use core::marker::Unsize;
+use core::marker::{self, Unsize};
 use core::mem;
 use core::ops::{CoerceUnsized, Deref, DerefMut};
-use core::ptr::Unique;
+use core::ops::{Placer, Boxed, Place, InPlace, BoxPlace};
+use core::ptr::{self, Unique};
 use core::raw::{TraitObject};
 
 /// A value that represents the heap. This is the default place that the `box`
@@ -71,8 +76,9 @@ use core::raw::{TraitObject};
 /// The following two examples are equivalent:
 ///
 /// ```
-/// # #![feature(box_heap)]
-/// #![feature(box_syntax)]
+/// #![feature(box_heap)]
+///
+/// #![feature(box_syntax, placement_in_syntax)]
 /// use std::boxed::HEAP;
 ///
 /// fn main() {
@@ -83,7 +89,15 @@ use core::raw::{TraitObject};
 #[lang = "exchange_heap"]
 #[unstable(feature = "box_heap",
            reason = "may be renamed; uncertain about custom allocator design")]
-pub const HEAP: () = ();
+#[allow(deprecated)]
+pub const HEAP: ExchangeHeapSingleton =
+    ExchangeHeapSingleton { _force_singleton: () };
+
+/// This the singleton type used solely for `boxed::HEAP`.
+#[unstable(feature = "box_heap",
+           reason = "may be renamed; uncertain about custom allocator design")]
+#[derive(Copy, Clone)]
+pub struct ExchangeHeapSingleton { _force_singleton: () }
 
 /// A pointer type for heap allocation.
 ///
@@ -91,7 +105,97 @@ pub const HEAP: () = ();
 #[lang = "owned_box"]
 #[stable(feature = "rust1", since = "1.0.0")]
 #[fundamental]
-pub struct Box<T>(Unique<T>);
+pub struct Box<T: ?Sized>(Unique<T>);
+
+/// `IntermediateBox` represents uninitialized backing storage for `Box`.
+///
+/// FIXME (pnkfelix): Ideally we would just reuse `Box<T>` instead of
+/// introducing a separate `IntermediateBox<T>`; but then you hit
+/// issues when you e.g. attempt to destructure an instance of `Box`,
+/// since it is a lang item and so it gets special handling by the
+/// compiler.  Easier just to make this parallel type for now.
+///
+/// FIXME (pnkfelix): Currently the `box` protocol only supports
+/// creating instances of sized types. This IntermediateBox is
+/// designed to be forward-compatible with a future protocol that
+/// supports creating instances of unsized types; that is why the type
+/// parameter has the `?Sized` generalization marker, and is also why
+/// this carries an explicit size. However, it probably does not need
+/// to carry the explicit alignment; that is just a work-around for
+/// the fact that the `align_of` intrinsic currently requires the
+/// input type to be Sized (which I do not think is strictly
+/// necessary).
+#[unstable(feature = "placement_in", reason = "placement box design is still being worked out.")]
+pub struct IntermediateBox<T: ?Sized>{
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+    marker: marker::PhantomData<*mut T>,
+}
+
+impl<T> Place<T> for IntermediateBox<T> {
+    fn pointer(&mut self) -> *mut T {
+        unsafe { ::core::mem::transmute(self.ptr) }
+    }
+}
+
+unsafe fn finalize<T>(b: IntermediateBox<T>) -> Box<T> {
+    let p = b.ptr as *mut T;
+    mem::forget(b);
+    mem::transmute(p)
+}
+
+fn make_place<T>() -> IntermediateBox<T> {
+    let size = mem::size_of::<T>();
+    let align = mem::align_of::<T>();
+
+    let p = if size == 0 {
+        heap::EMPTY as *mut u8
+    } else {
+        let p = unsafe {
+            heap::allocate(size, align)
+        };
+        if p.is_null() {
+            panic!("Box make_place allocation failure.");
+        }
+        p
+    };
+
+    IntermediateBox { ptr: p, size: size, align: align, marker: marker::PhantomData }
+}
+
+impl<T> BoxPlace<T> for IntermediateBox<T> {
+    fn make_place() -> IntermediateBox<T> { make_place() }
+}
+
+impl<T> InPlace<T> for IntermediateBox<T> {
+    type Owner = Box<T>;
+    unsafe fn finalize(self) -> Box<T> { finalize(self) }
+}
+
+impl<T> Boxed for Box<T> {
+    type Data = T;
+    type Place = IntermediateBox<T>;
+    unsafe fn finalize(b: IntermediateBox<T>) -> Box<T> { finalize(b) }
+}
+
+impl<T> Placer<T> for ExchangeHeapSingleton {
+    type Place = IntermediateBox<T>;
+
+    fn make_place(self) -> IntermediateBox<T> {
+        make_place()
+    }
+}
+
+impl<T: ?Sized> Drop for IntermediateBox<T> {
+    fn drop(&mut self) {
+        if self.size > 0 {
+            unsafe {
+                heap::deallocate(self.ptr, self.size, self.align)
+            }
+        }
+    }
+}
 
 impl<T> Box<T> {
     /// Allocates memory on the heap and then moves `x` into it.
@@ -139,7 +243,8 @@ impl<T : ?Sized> Box<T> {
     ///
     /// # Examples
     /// ```
-    /// # #![feature(box_raw)]
+    /// #![feature(box_raw)]
+    ///
     /// let seventeen = Box::new(17u32);
     /// let raw = Box::into_raw(seventeen);
     /// let boxed_again = unsafe { Box::from_raw(raw) };
@@ -162,7 +267,8 @@ impl<T : ?Sized> Box<T> {
 ///
 /// # Examples
 /// ```
-/// # #![feature(box_raw)]
+/// #![feature(box_raw)]
+///
 /// use std::boxed;
 ///
 /// let seventeen = Box::new(17u32);
@@ -200,13 +306,13 @@ impl<T: Clone> Clone for Box<T> {
     /// ```
     #[inline]
     fn clone(&self) -> Box<T> { box {(**self).clone()} }
-
     /// Copies `source`'s contents into `self` without creating a new allocation.
     ///
     /// # Examples
     ///
     /// ```
-    /// # #![feature(box_raw)]
+    /// #![feature(box_raw)]
+    ///
     /// let x = Box::new(5);
     /// let mut y = Box::new(10);
     ///
@@ -217,6 +323,19 @@ impl<T: Clone> Clone for Box<T> {
     #[inline]
     fn clone_from(&mut self, source: &Box<T>) {
         (**self).clone_from(&(**source));
+    }
+}
+
+
+#[stable(feature = "box_slice_clone", since = "1.3.0")]
+impl Clone for Box<str> {
+    fn clone(&self) -> Self {
+        let len = self.len();
+        let buf = RawVec::with_capacity(len);
+        unsafe {
+            ptr::copy_nonoverlapping(self.as_ptr(), buf.ptr(), len);
+            mem::transmute(buf.into_box()) // bytes to str ~magic
+        }
     }
 }
 
@@ -414,3 +533,55 @@ impl<'a,A,R> FnOnce<A> for Box<FnBox<A,Output=R>+Send+'a> {
 }
 
 impl<T: ?Sized+Unsize<U>, U: ?Sized> CoerceUnsized<Box<U>> for Box<T> {}
+
+#[stable(feature = "box_slice_clone", since = "1.3.0")]
+impl<T: Clone> Clone for Box<[T]> {
+    fn clone(&self) -> Self {
+        let mut new = BoxBuilder {
+            data: RawVec::with_capacity(self.len()),
+            len: 0
+        };
+
+        let mut target = new.data.ptr();
+
+        for item in self.iter() {
+            unsafe {
+                ptr::write(target, item.clone());
+                target = target.offset(1);
+            };
+
+            new.len += 1;
+        }
+
+        return unsafe { new.into_box() };
+
+        // Helper type for responding to panics correctly.
+        struct BoxBuilder<T> {
+            data: RawVec<T>,
+            len: usize,
+        }
+
+        impl<T> BoxBuilder<T> {
+            unsafe fn into_box(self) -> Box<[T]> {
+                let raw = ptr::read(&self.data);
+                mem::forget(self);
+                raw.into_box()
+            }
+        }
+
+        impl<T> Drop for BoxBuilder<T> {
+            fn drop(&mut self) {
+                let mut data = self.data.ptr();
+                let max = unsafe { data.offset(self.len as isize) };
+
+                while data != max {
+                    unsafe {
+                        ptr::read(data);
+                        data = data.offset(1);
+                    }
+                }
+            }
+        }
+    }
+}
+

@@ -11,10 +11,11 @@
 //! The main parser interface
 
 use ast;
-use codemap::{Span, CodeMap, FileMap};
+use codemap::{self, Span, CodeMap, FileMap};
 use diagnostic::{SpanHandler, Handler, Auto, FatalError};
 use parse::attr::ParserAttr;
 use parse::parser::Parser;
+use parse::token::InternedString;
 use ptr::P;
 use str::char_at;
 
@@ -203,7 +204,14 @@ pub fn new_sub_parser_from_file<'a>(sess: &'a ParseSess,
 pub fn filemap_to_parser<'a>(sess: &'a ParseSess,
                              filemap: Rc<FileMap>,
                              cfg: ast::CrateConfig) -> Parser<'a> {
-    tts_to_parser(sess, filemap_to_tts(sess, filemap), cfg)
+    let end_pos = filemap.end_pos;
+    let mut parser = tts_to_parser(sess, filemap_to_tts(sess, filemap), cfg);
+
+    if parser.token == token::Eof && parser.span == codemap::DUMMY_SP {
+        parser.span = codemap::mk_sp(end_pos, end_pos);
+    }
+
+    parser
 }
 
 // must preserve old name for now, because quote! from the *existing*
@@ -432,17 +440,17 @@ fn looks_like_width_suffix(first_chars: &[char], s: &str) -> bool {
 fn filtered_float_lit(data: token::InternedString, suffix: Option<&str>,
                       sd: &SpanHandler, sp: Span) -> ast::Lit_ {
     debug!("filtered_float_lit: {}, {:?}", data, suffix);
-    match suffix {
+    match suffix.as_ref().map(|s| &**s) {
         Some("f32") => ast::LitFloat(data, ast::TyF32),
         Some("f64") => ast::LitFloat(data, ast::TyF64),
         Some(suf) => {
             if suf.len() >= 2 && looks_like_width_suffix(&['f'], suf) {
                 // if it looks like a width, lets try to be helpful.
-                sd.span_err(sp, &*format!("illegal width `{}` for float literal, \
-                                          valid widths are 32 and 64", &suf[1..]));
+                sd.span_err(sp, &*format!("invalid width `{}` for float literal", &suf[1..]));
+                sd.fileline_help(sp, "valid widths are 32 and 64");
             } else {
-                sd.span_err(sp, &*format!("illegal suffix `{}` for float literal, \
-                                          valid suffixes are `f32` and `f64`", suf));
+                sd.span_err(sp, &*format!("invalid suffix `{}` for float literal", suf));
+                sd.fileline_help(sp, "valid suffixes are `f32` and `f64`");
             }
 
             ast::LitFloatUnsuffixed(data)
@@ -450,12 +458,13 @@ fn filtered_float_lit(data: token::InternedString, suffix: Option<&str>,
         None => ast::LitFloatUnsuffixed(data)
     }
 }
-pub fn float_lit(s: &str, suffix: Option<&str>, sd: &SpanHandler, sp: Span) -> ast::Lit_ {
+pub fn float_lit(s: &str, suffix: Option<InternedString>,
+                 sd: &SpanHandler, sp: Span) -> ast::Lit_ {
     debug!("float_lit: {:?}, {:?}", s, suffix);
     // FIXME #2252: bounds checking float literals is deferred until trans
     let s = s.chars().filter(|&c| c != '_').collect::<String>();
-    let data = token::intern_and_get_ident(&*s);
-    filtered_float_lit(data, suffix, sd, sp)
+    let data = token::intern_and_get_ident(&s);
+    filtered_float_lit(data, suffix.as_ref().map(|s| &**s), sd, sp)
 }
 
 /// Parse a string representing a byte literal into its final form. Similar to `char_lit`
@@ -550,7 +559,11 @@ pub fn binary_lit(lit: &str) -> Rc<Vec<u8>> {
     Rc::new(res)
 }
 
-pub fn integer_lit(s: &str, suffix: Option<&str>, sd: &SpanHandler, sp: Span) -> ast::Lit_ {
+pub fn integer_lit(s: &str,
+                   suffix: Option<InternedString>,
+                   sd: &SpanHandler,
+                   sp: Span)
+                   -> ast::Lit_ {
     // s can only be ascii, byte indexing is fine
 
     let s2 = s.chars().filter(|&c| c != '_').collect::<String>();
@@ -572,8 +585,8 @@ pub fn integer_lit(s: &str, suffix: Option<&str>, sd: &SpanHandler, sp: Span) ->
     }
 
     // 1f64 and 2f32 etc. are valid float literals.
-    match suffix {
-        Some(suf) if looks_like_width_suffix(&['f'], suf) => {
+    if let Some(ref suf) = suffix {
+        if looks_like_width_suffix(&['f'], suf) {
             match base {
                 16 => sd.span_err(sp, "hexadecimal float literal is not supported"),
                 8 => sd.span_err(sp, "octal float literal is not supported"),
@@ -581,18 +594,17 @@ pub fn integer_lit(s: &str, suffix: Option<&str>, sd: &SpanHandler, sp: Span) ->
                 _ => ()
             }
             let ident = token::intern_and_get_ident(&*s);
-            return filtered_float_lit(ident, suffix, sd, sp)
+            return filtered_float_lit(ident, Some(&**suf), sd, sp)
         }
-        _ => {}
     }
 
     if base != 10 {
         s = &s[2..];
     }
 
-    if let Some(suf) = suffix {
+    if let Some(ref suf) = suffix {
         if suf.is_empty() { sd.span_bug(sp, "found empty literal suffix in Some")}
-        ty = match suf {
+        ty = match &**suf {
             "isize" => ast::SignedIntLit(ast::TyIs, ast::Plus),
             "i8"  => ast::SignedIntLit(ast::TyI8, ast::Plus),
             "i16" => ast::SignedIntLit(ast::TyI16, ast::Plus),
@@ -607,11 +619,11 @@ pub fn integer_lit(s: &str, suffix: Option<&str>, sd: &SpanHandler, sp: Span) ->
                 // i<digits> and u<digits> look like widths, so lets
                 // give an error message along those lines
                 if looks_like_width_suffix(&['i', 'u'], suf) {
-                    sd.span_err(sp, &*format!("illegal width `{}` for integer literal; \
-                                              valid widths are 8, 16, 32 and 64",
+                    sd.span_err(sp, &*format!("invalid width `{}` for integer literal",
                                               &suf[1..]));
+                    sd.fileline_help(sp, "valid widths are 8, 16, 32 and 64");
                 } else {
-                    sd.span_err(sp, &*format!("illegal suffix `{}` for numeric literal", suf));
+                    sd.span_err(sp, &*format!("invalid suffix `{}` for numeric literal", suf));
                     sd.fileline_help(sp, "the suffix must be one of the integral types \
                                       (`u32`, `isize`, etc)");
                 }
@@ -732,8 +744,8 @@ mod tests {
                 Some(&ast::TtToken(_, token::Ident(name_zip, token::Plain))),
                 Some(&ast::TtDelimited(_, ref macro_delimed)),
             )
-            if name_macro_rules.as_str() == "macro_rules"
-            && name_zip.as_str() == "zip" => {
+            if name_macro_rules.name == "macro_rules"
+            && name_zip.name == "zip" => {
                 let tts = &macro_delimed.tts[..];
                 match (tts.len(), tts.get(0), tts.get(1), tts.get(2)) {
                     (
@@ -748,10 +760,10 @@ mod tests {
                             (
                                 2,
                                 Some(&ast::TtToken(_, token::Dollar)),
-                                Some(&ast::TtToken(_, token::Ident(name, token::Plain))),
+                                Some(&ast::TtToken(_, token::Ident(ident, token::Plain))),
                             )
                             if first_delimed.delim == token::Paren
-                            && name.as_str() == "a" => {},
+                            && ident.name == "a" => {},
                             _ => panic!("value 3: {:?}", **first_delimed),
                         }
                         let tts = &second_delimed.tts[..];
@@ -759,10 +771,10 @@ mod tests {
                             (
                                 2,
                                 Some(&ast::TtToken(_, token::Dollar)),
-                                Some(&ast::TtToken(_, token::Ident(name, token::Plain))),
+                                Some(&ast::TtToken(_, token::Ident(ident, token::Plain))),
                             )
                             if second_delimed.delim == token::Paren
-                            && name.as_str() == "a" => {},
+                            && ident.name == "a" => {},
                             _ => panic!("value 4: {:?}", **second_delimed),
                         }
                     },

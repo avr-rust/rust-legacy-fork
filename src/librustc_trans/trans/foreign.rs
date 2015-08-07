@@ -37,7 +37,6 @@ use syntax::abi::{Cdecl, Aapcs, C, Win64, Abi};
 use syntax::abi::{RustIntrinsic, Rust, RustCall, Stdcall, Fastcall, System};
 use syntax::codemap::Span;
 use syntax::parse::token::{InternedString, special_idents};
-use syntax::parse::token;
 use syntax::ast;
 use syntax::attr;
 use syntax::print::pprust;
@@ -450,7 +449,7 @@ pub fn trans_native_call<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 fn gate_simd_ffi(tcx: &ty::ctxt, decl: &ast::FnDecl, ty: &ty::BareFnTy) {
     if !tcx.sess.features.borrow().simd_ffi {
         let check = |ast_ty: &ast::Ty, ty: ty::Ty| {
-            if ty.is_simd(tcx) {
+            if ty.is_simd() {
                 tcx.sess.span_err(ast_ty.span,
                               &format!("use of SIMD type `{}` in FFI is highly experimental and \
                                         may result in invalid code",
@@ -627,9 +626,7 @@ pub fn trans_rust_fn_with_foreign_abi<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
                ccx.tcx().map.path_to_string(id),
                id, t);
 
-        let llfn = declare::define_internal_rust_fn(ccx, &ps[..], t).unwrap_or_else(||{
-            ccx.sess().bug(&format!("symbol `{}` already defined", ps));
-        });
+        let llfn = declare::define_internal_rust_fn(ccx, &ps, t);
         attributes::from_fn_attrs(ccx, attrs, llfn);
         base::trans_fn(ccx, decl, body, llfn, param_substs, id, &[]);
         llfn
@@ -904,7 +901,7 @@ pub fn link_name(i: &ast::ForeignItem) -> InternedString {
         Some(ln) => ln.clone(),
         None => match weak_lang_items::link_name(&i.attrs) {
             Some(name) => name,
-            None => token::get_ident(i.ident),
+            None => i.ident.name.as_str(),
         }
     }
 }

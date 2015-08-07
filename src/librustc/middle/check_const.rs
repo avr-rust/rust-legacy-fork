@@ -26,6 +26,7 @@
 
 use middle::cast::{CastKind};
 use middle::const_eval;
+use middle::const_eval::EvalHint::ExprTypeChecked;
 use middle::def;
 use middle::expr_use_visitor as euv;
 use middle::infer;
@@ -39,6 +40,7 @@ use syntax::codemap::Span;
 use syntax::visit::{self, Visitor};
 
 use std::collections::hash_map::Entry;
+use std::cmp::Ordering;
 
 // Const qualification, from partial to completely promotable.
 bitflags! {
@@ -365,6 +367,19 @@ impl<'a, 'tcx, 'v> Visitor<'v> for CheckCrateVisitor<'a, 'tcx> {
             ast::PatRange(ref start, ref end) => {
                 self.global_expr(Mode::Const, &**start);
                 self.global_expr(Mode::Const, &**end);
+
+                match const_eval::compare_lit_exprs(self.tcx, start, end) {
+                    Some(Ordering::Less) |
+                    Some(Ordering::Equal) => {}
+                    Some(Ordering::Greater) => {
+                        span_err!(self.tcx.sess, start.span, E0030,
+                            "lower range bound must be less than or equal to upper");
+                    }
+                    None => {
+                        self.tcx.sess.span_bug(
+                            start.span, "literals of different types in range pat");
+                    }
+                }
             }
             _ => visit::walk_pat(self, p)
         }
@@ -457,7 +472,8 @@ impl<'a, 'tcx, 'v> Visitor<'v> for CheckCrateVisitor<'a, 'tcx> {
                 match node_ty.sty {
                     ty::TyUint(_) | ty::TyInt(_) if div_or_rem => {
                         if !self.qualif.intersects(ConstQualif::NOT_CONST) {
-                            match const_eval::eval_const_expr_partial(self.tcx, ex, None) {
+                            match const_eval::eval_const_expr_partial(
+                                    self.tcx, ex, ExprTypeChecked) {
                                 Ok(_) => {}
                                 Err(msg) => {
                                     span_err!(self.tcx.sess, msg.span, E0020,
@@ -530,8 +546,8 @@ impl<'a, 'tcx, 'v> Visitor<'v> for CheckCrateVisitor<'a, 'tcx> {
 fn check_expr<'a, 'tcx>(v: &mut CheckCrateVisitor<'a, 'tcx>,
                         e: &ast::Expr, node_ty: Ty<'tcx>) {
     match node_ty.sty {
-        ty::TyStruct(did, _) |
-        ty::TyEnum(did, _) if v.tcx.has_dtor(did) => {
+        ty::TyStruct(def, _) |
+        ty::TyEnum(def, _) if def.has_dtor(v.tcx) => {
             v.add_qualif(ConstQualif::NEEDS_DROP);
             if v.mode != Mode::Var {
                 v.tcx.sess.span_err(e.span,
@@ -634,7 +650,7 @@ fn check_expr<'a, 'tcx>(v: &mut CheckCrateVisitor<'a, 'tcx>,
                     }
                 }
                 Some(def::DefConst(did)) |
-                Some(def::DefAssociatedConst(did, _)) => {
+                Some(def::DefAssociatedConst(did)) => {
                     if let Some(expr) = const_eval::lookup_const_by_id(v.tcx, did,
                                                                        Some(e.id)) {
                         let inner = v.global_expr(Mode::Const, expr);
@@ -680,9 +696,16 @@ fn check_expr<'a, 'tcx>(v: &mut CheckCrateVisitor<'a, 'tcx>,
                     v.add_qualif(ConstQualif::NON_ZERO_SIZED);
                     true
                 }
-                Some(def::DefMethod(did, def::FromImpl(_))) |
                 Some(def::DefFn(did, _)) => {
                     v.handle_const_fn_call(e, did, node_ty)
+                }
+                Some(def::DefMethod(did)) => {
+                    match v.tcx.impl_or_trait_item(did).container() {
+                        ty::ImplContainer(_) => {
+                            v.handle_const_fn_call(e, did, node_ty)
+                        }
+                        ty::TraitContainer(_) => false
+                    }
                 }
                 _ => false
             };

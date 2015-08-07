@@ -11,7 +11,8 @@
 // This is pretty much entirely stolen from TreeSet, since BTreeMap has an identical interface
 // to TreeMap
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use core::cmp::Ordering::{self, Less, Greater, Equal};
 use core::fmt::Debug;
@@ -141,7 +142,8 @@ impl<T: Ord> BTreeSet<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(btree_range, collections_bound)]
+    /// #![feature(btree_range, collections_bound)]
+    ///
     /// use std::collections::BTreeSet;
     /// use std::collections::Bound::{Included, Unbounded};
     ///
@@ -156,7 +158,11 @@ impl<T: Ord> BTreeSet<T> {
     /// ```
     #[unstable(feature = "btree_range",
                reason = "matches collection reform specification, waiting for dust to settle")]
-    pub fn range<'a>(&'a self, min: Bound<&T>, max: Bound<&T>) -> Range<'a, T> {
+    pub fn range<'a, Min: ?Sized + Ord = T, Max: ?Sized + Ord = T>(&'a self, min: Bound<&Min>,
+                                                                   max: Bound<&Max>)
+        -> Range<'a, T> where
+        T: Borrow<Min> + Borrow<Max>,
+    {
         fn first<A, B>((a, _): (A, B)) -> A { a }
         let first: fn((&'a T, &'a ())) -> &'a T = first; // coerce to fn pointer
 

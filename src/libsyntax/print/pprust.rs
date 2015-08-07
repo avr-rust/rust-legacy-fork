@@ -113,7 +113,7 @@ pub fn print_crate<'a>(cm: &'a CodeMap,
                                       out,
                                       ann,
                                       is_expanded);
-    if is_expanded && std_inject::use_std(krate) {
+    if is_expanded && !std_inject::no_std(krate) {
         // We need to print `#![no_std]` (and its feature gate) so that
         // compiling pretty-printed source won't inject libstd again.
         // However we don't want these attributes in the AST because
@@ -251,40 +251,40 @@ pub fn token_to_string(tok: &Token) -> String {
         /* Literals */
         token::Literal(lit, suf) => {
             let mut out = match lit {
-                token::Byte(b)           => format!("b'{}'", b.as_str()),
-                token::Char(c)           => format!("'{}'", c.as_str()),
-                token::Float(c)          => c.as_str().to_string(),
-                token::Integer(c)        => c.as_str().to_string(),
-                token::Str_(s)           => format!("\"{}\"", s.as_str()),
+                token::Byte(b)           => format!("b'{}'", b),
+                token::Char(c)           => format!("'{}'", c),
+                token::Float(c)          => c.to_string(),
+                token::Integer(c)        => c.to_string(),
+                token::Str_(s)           => format!("\"{}\"", s),
                 token::StrRaw(s, n)      => format!("r{delim}\"{string}\"{delim}",
                                                     delim=repeat("#", n),
-                                                    string=s.as_str()),
-                token::Binary(v)         => format!("b\"{}\"", v.as_str()),
+                                                    string=s),
+                token::Binary(v)         => format!("b\"{}\"", v),
                 token::BinaryRaw(s, n)   => format!("br{delim}\"{string}\"{delim}",
                                                     delim=repeat("#", n),
-                                                    string=s.as_str()),
+                                                    string=s),
             };
 
             if let Some(s) = suf {
-                out.push_str(s.as_str())
+                out.push_str(&s.as_str())
             }
 
             out
         }
 
         /* Name components */
-        token::Ident(s, _)          => token::get_ident(s).to_string(),
-        token::Lifetime(s)          => format!("{}", token::get_ident(s)),
+        token::Ident(s, _)          => s.to_string(),
+        token::Lifetime(s)          => s.to_string(),
         token::Underscore           => "_".to_string(),
 
         /* Other */
-        token::DocComment(s)        => s.as_str().to_string(),
+        token::DocComment(s)        => s.to_string(),
         token::SubstNt(s, _)        => format!("${}", s),
         token::MatchNt(s, t, _, _)  => format!("${}:{}", s, t),
         token::Eof                  => "<eof>".to_string(),
         token::Whitespace           => " ".to_string(),
         token::Comment              => "/* */".to_string(),
-        token::Shebang(s)           => format!("/* shebang: {}*/", s.as_str()),
+        token::Shebang(s)           => format!("/* shebang: {}*/", s),
 
         token::SpecialVarNt(var)    => format!("${}", var.as_str()),
 
@@ -734,6 +734,9 @@ impl<'a> State<'a> {
             ast::TyInfer => {
                 try!(word(&mut self.s, "_"));
             }
+            ast::TyMac(ref m) => {
+                try!(self.print_mac(m, token::Paren));
+            }
         }
         self.end()
     }
@@ -819,7 +822,7 @@ impl<'a> State<'a> {
                 try!(self.head(&visibility_qualified(item.vis,
                                                      "extern crate")));
                 if let Some(p) = *optional_path {
-                    let val = token::get_name(p);
+                    let val = p.as_str();
                     if val.contains("-") {
                         try!(self.print_string(&val, ast::CookedStr));
                     } else {
@@ -1434,8 +1437,8 @@ impl<'a> State<'a> {
                                       attrs: &[ast::Attribute],
                                       close_box: bool) -> io::Result<()> {
         match blk.rules {
-            ast::UnsafeBlock(..) => try!(self.word_space("unsafe")),
-            ast::DefaultBlock => ()
+            ast::UnsafeBlock(..) | ast::PushUnsafeBlock(..) => try!(self.word_space("unsafe")),
+            ast::DefaultBlock    | ast::PopUnsafeBlock(..) => ()
         }
         try!(self.maybe_print_comment(blk.span.lo));
         try!(self.ann.pre(self, NodeBlock(blk)));
@@ -2009,7 +2012,7 @@ impl<'a> State<'a> {
     }
 
     pub fn print_ident(&mut self, ident: ast::Ident) -> io::Result<()> {
-        try!(word(&mut self.s, &token::get_ident(ident)));
+        try!(word(&mut self.s, &ident.name.as_str()));
         self.ann.post(self, NodeIdent(&ident))
     }
 
@@ -2018,7 +2021,7 @@ impl<'a> State<'a> {
     }
 
     pub fn print_name(&mut self, name: ast::Name) -> io::Result<()> {
-        try!(word(&mut self.s, &token::get_name(name)));
+        try!(word(&mut self.s, &name.as_str()));
         self.ann.post(self, NodeName(&name))
     }
 

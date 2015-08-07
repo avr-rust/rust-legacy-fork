@@ -10,11 +10,13 @@
 
 #![allow(non_upper_case_globals)]
 
+use arena::TypedArena;
 use llvm;
 use llvm::{SequentiallyConsistent, Acquire, Release, AtomicXchg, ValueRef, TypeKind};
 use middle::subst;
 use middle::subst::FnSpace;
 use trans::adt;
+use trans::attributes;
 use trans::base::*;
 use trans::build::*;
 use trans::callee;
@@ -23,6 +25,7 @@ use trans::cleanup::CleanupMethods;
 use trans::common::*;
 use trans::datum::*;
 use trans::debuginfo::DebugLoc;
+use trans::declare;
 use trans::expr;
 use trans::glue;
 use trans::type_of::*;
@@ -31,12 +34,13 @@ use trans::machine;
 use trans::machine::llsize_of;
 use trans::type_::Type;
 use middle::ty::{self, Ty, HasTypeFlags};
-use syntax::abi::RustIntrinsic;
+use middle::subst::Substs;
+use syntax::abi::{self, RustIntrinsic};
 use syntax::ast;
 use syntax::parse::token;
 
 pub fn get_simple_intrinsic(ccx: &CrateContext, item: &ast::ForeignItem) -> Option<ValueRef> {
-    let name = match &token::get_ident(item.ident)[..] {
+    let name = match &*item.ident.name.as_str() {
         "sqrtf32" => "llvm.sqrt.f32",
         "sqrtf64" => "llvm.sqrt.f64",
         "powif32" => "llvm.powi.f32",
@@ -168,10 +172,10 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
         _ => panic!("expected bare_fn in trans_intrinsic_call")
     };
     let foreign_item = tcx.map.expect_foreign_item(node);
-    let name = token::get_ident(foreign_item.ident);
+    let name = foreign_item.ident.name.as_str();
 
     // For `transmute` we can just trans the input expr directly into dest
-    if &name[..] == "transmute" {
+    if name == "transmute" {
         let llret_ty = type_of::type_of(ccx, ret_ty.unwrap());
         match args {
             callee::ArgExprs(arg_exprs) => {
@@ -268,7 +272,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
     // (the first argument) and then trans the source value (the
     // second argument) directly into the resulting destination
     // address.
-    if &name[..] == "move_val_init" {
+    if name == "move_val_init" {
         if let callee::ArgExprs(ref exprs) = args {
             let (dest_expr, source_expr) = if exprs.len() != 2 {
                 ccx.sess().bug("expected two exprs as arguments for `move_val_init` intrinsic");
@@ -302,6 +306,42 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
         }
     }
 
+    let call_debug_location = DebugLoc::At(call_info.id, call_info.span);
+
+    // For `try` we need some custom control flow
+    if &name[..] == "try" {
+        if let callee::ArgExprs(ref exprs) = args {
+            let (func, data) = if exprs.len() != 2 {
+                ccx.sess().bug("expected two exprs as arguments for \
+                                `try` intrinsic");
+            } else {
+                (&exprs[0], &exprs[1])
+            };
+
+            // translate arguments
+            let func = unpack_datum!(bcx, expr::trans(bcx, func));
+            let func = unpack_datum!(bcx, func.to_rvalue_datum(bcx, "func"));
+            let data = unpack_datum!(bcx, expr::trans(bcx, data));
+            let data = unpack_datum!(bcx, data.to_rvalue_datum(bcx, "data"));
+
+            let dest = match dest {
+                expr::SaveIn(d) => d,
+                expr::Ignore => alloc_ty(bcx, tcx.mk_mut_ptr(tcx.types.i8),
+                                         "try_result"),
+            };
+
+            // do the invoke
+            bcx = try_intrinsic(bcx, func.val, data.val, dest,
+                                call_debug_location);
+
+            fcx.pop_and_trans_custom_cleanup_scope(bcx, cleanup_scope);
+            return Result::new(bcx, dest);
+        } else {
+            ccx.sess().bug("expected two exprs as arguments for \
+                            `try` intrinsic");
+        }
+    }
+
     // Push the arguments.
     let mut llargs = Vec::new();
     bcx = callee::trans_args(bcx,
@@ -314,10 +354,8 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
 
     fcx.scopes.borrow_mut().last_mut().unwrap().drop_non_lifetime_clean();
 
-    let call_debug_location = DebugLoc::At(call_info.id, call_info.span);
-
     // These are the only intrinsic functions that diverge.
-    if &name[..] == "abort" {
+    if name == "abort" {
         let llfn = ccx.get_intrinsic(&("llvm.trap"));
         Call(bcx, llfn, &[], None, call_debug_location);
         fcx.pop_and_trans_custom_cleanup_scope(bcx, cleanup_scope);
@@ -350,7 +388,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
     };
 
     let simple = get_simple_intrinsic(ccx, &*foreign_item);
-    let llval = match (simple, &name[..]) {
+    let llval = match (simple, &*name) {
         (Some(llfn), _) => {
             Call(bcx, llfn, &llargs, None, call_debug_location)
         }
@@ -988,4 +1026,247 @@ fn with_overflow_intrinsic<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     } else {
         ret
     }
+}
+
+fn try_intrinsic<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
+                             func: ValueRef,
+                             data: ValueRef,
+                             dest: ValueRef,
+                             dloc: DebugLoc) -> Block<'blk, 'tcx> {
+    if bcx.sess().no_landing_pads() {
+        Call(bcx, func, &[data], None, dloc);
+        Store(bcx, C_null(Type::i8p(bcx.ccx())), dest);
+        bcx
+    } else if bcx.sess().target.target.options.is_like_msvc {
+        trans_msvc_try(bcx, func, data, dest, dloc)
+    } else {
+        trans_gnu_try(bcx, func, data, dest, dloc)
+    }
+}
+
+// MSVC's definition of the `rust_try` function. The exact implementation here
+// is a little different than the GNU (standard) version below, not only because
+// of the personality function but also because of the other fiddly bits about
+// SEH. LLVM also currently requires us to structure this a very particular way
+// as explained below.
+//
+// Like with the GNU version we generate a shim wrapper
+fn trans_msvc_try<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
+                              func: ValueRef,
+                              data: ValueRef,
+                              dest: ValueRef,
+                              dloc: DebugLoc) -> Block<'blk, 'tcx> {
+    let llfn = get_rust_try_fn(bcx.fcx, &mut |try_fn_ty, output| {
+        let ccx = bcx.ccx();
+        let dloc = DebugLoc::None;
+        let rust_try = declare::define_internal_rust_fn(ccx, "__rust_try",
+                                                         try_fn_ty);
+        let (fcx, block_arena);
+        block_arena = TypedArena::new();
+        fcx = new_fn_ctxt(ccx, rust_try, ast::DUMMY_NODE_ID, false,
+                          output, ccx.tcx().mk_substs(Substs::trans_empty()),
+                          None, &block_arena);
+        let bcx = init_function(&fcx, true, output);
+        let then = fcx.new_temp_block("then");
+        let catch = fcx.new_temp_block("catch");
+        let catch_return = fcx.new_temp_block("catch-return");
+        let catch_resume = fcx.new_temp_block("catch-resume");
+        let personality = fcx.eh_personality();
+
+        let eh_typeid_for = ccx.get_intrinsic(&"llvm.eh.typeid.for");
+        let rust_try_filter = match bcx.tcx().lang_items.msvc_try_filter() {
+            Some(did) => callee::trans_fn_ref(ccx, did, ExprId(0),
+                                              bcx.fcx.param_substs).val,
+            None => bcx.sess().bug("msvc_try_filter not defined"),
+        };
+
+        // Type indicator for the exception being thrown, not entirely sure
+        // what's going on here but it's what all the examples in LLVM use.
+        let lpad_ty = Type::struct_(ccx, &[Type::i8p(ccx), Type::i32(ccx)],
+                                    false);
+
+        llvm::SetFunctionAttribute(rust_try, llvm::Attribute::NoInline);
+        llvm::SetFunctionAttribute(rust_try, llvm::Attribute::OptimizeNone);
+        let func = llvm::get_param(rust_try, 0);
+        let data = llvm::get_param(rust_try, 1);
+
+        // Invoke the function, specifying our two temporary landing pads as the
+        // ext point. After the invoke we've terminated our basic block.
+        Invoke(bcx, func, &[data], then.llbb, catch.llbb, None, dloc);
+
+        // All the magic happens in this landing pad, and this is basically the
+        // only landing pad in rust tagged with "catch" to indicate that we're
+        // catching an exception. The other catch handlers in the GNU version
+        // below just catch *all* exceptions, but that's because most exceptions
+        // are already filtered out by the gnu personality function.
+        //
+        // For MSVC we're just using a standard personality function that we
+        // can't customize (e.g. _except_handler3 or __C_specific_handler), so
+        // we need to do the exception filtering ourselves. This is currently
+        // performed by the `__rust_try_filter` function. This function,
+        // specified in the landingpad instruction, will be invoked by Windows
+        // SEH routines and will return whether the exception in question can be
+        // caught (aka the Rust runtime is the one that threw the exception).
+        //
+        // To get this to compile (currently LLVM segfaults if it's not in this
+        // particular structure), when the landingpad is executing we test to
+        // make sure that the ID of the exception being thrown is indeed the one
+        // that we were expecting. If it's not, we resume the exception, and
+        // otherwise we return the pointer that we got Full disclosure: It's not
+        // clear to me what this `llvm.eh.typeid` stuff is doing *other* then
+        // just allowing LLVM to compile this file without segfaulting. I would
+        // expect the entire landing pad to just be:
+        //
+        //     %vals = landingpad ...
+        //     %ehptr = extractvalue { i8*, i32 } %vals, 0
+        //     ret i8* %ehptr
+        //
+        // but apparently LLVM chokes on this, so we do the more complicated
+        // thing to placate it.
+        let vals = LandingPad(catch, lpad_ty, personality, 1);
+        let rust_try_filter = BitCast(catch, rust_try_filter, Type::i8p(ccx));
+        AddClause(catch, vals, rust_try_filter);
+        let ehptr = ExtractValue(catch, vals, 0);
+        let sel = ExtractValue(catch, vals, 1);
+        let filter_sel = Call(catch, eh_typeid_for, &[rust_try_filter], None,
+                              dloc);
+        let is_filter = ICmp(catch, llvm::IntEQ, sel, filter_sel, dloc);
+        CondBr(catch, is_filter, catch_return.llbb, catch_resume.llbb, dloc);
+
+        // Our "catch-return" basic block is where we've determined that we
+        // actually need to catch this exception, in which case we just return
+        // the exception pointer.
+        Ret(catch_return, ehptr, dloc);
+
+        // The "catch-resume" block is where we're running this landing pad but
+        // we actually need to not catch the exception, so just resume the
+        // exception to return.
+        Resume(catch_resume, vals);
+
+        // On the successful branch we just return null.
+        Ret(then, C_null(Type::i8p(ccx)), dloc);
+
+        return rust_try
+    });
+
+    // Note that no invoke is used here because by definition this function
+    // can't panic (that's what it's catching).
+    let ret = Call(bcx, llfn, &[func, data], None, dloc);
+    Store(bcx, ret, dest);
+    return bcx;
+}
+
+// Definition of the standard "try" function for Rust using the GNU-like model
+// of exceptions (e.g. the normal semantics of LLVM's landingpad and invoke
+// instructions).
+//
+// This translation is a little surprising because
+// we always call a shim function instead of inlining the call to `invoke`
+// manually here. This is done because in LLVM we're only allowed to have one
+// personality per function definition. The call to the `try` intrinsic is
+// being inlined into the function calling it, and that function may already
+// have other personality functions in play. By calling a shim we're
+// guaranteed that our shim will have the right personality function.
+//
+fn trans_gnu_try<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
+                             func: ValueRef,
+                             data: ValueRef,
+                             dest: ValueRef,
+                             dloc: DebugLoc) -> Block<'blk, 'tcx> {
+    let llfn = get_rust_try_fn(bcx.fcx, &mut |try_fn_ty, output| {
+        let ccx = bcx.ccx();
+        let dloc = DebugLoc::None;
+
+        // Translates the shims described above:
+        //
+        //   bcx:
+        //      invoke %func(%args...) normal %normal unwind %catch
+        //
+        //   normal:
+        //      ret null
+        //
+        //   catch:
+        //      (ptr, _) = landingpad
+        //      ret ptr
+
+        let rust_try = declare::define_internal_rust_fn(ccx, "__rust_try", try_fn_ty);
+        attributes::emit_uwtable(rust_try, true);
+        let catch_pers = match bcx.tcx().lang_items.eh_personality_catch() {
+            Some(did) => callee::trans_fn_ref(ccx, did, ExprId(0),
+                                              bcx.fcx.param_substs).val,
+            None => bcx.tcx().sess.bug("eh_personality_catch not defined"),
+        };
+
+        let (fcx, block_arena);
+        block_arena = TypedArena::new();
+        fcx = new_fn_ctxt(ccx, rust_try, ast::DUMMY_NODE_ID, false,
+                          output, ccx.tcx().mk_substs(Substs::trans_empty()),
+                          None, &block_arena);
+        let bcx = init_function(&fcx, true, output);
+        let then = bcx.fcx.new_temp_block("then");
+        let catch = bcx.fcx.new_temp_block("catch");
+
+        let func = llvm::get_param(rust_try, 0);
+        let data = llvm::get_param(rust_try, 1);
+        Invoke(bcx, func, &[data], then.llbb, catch.llbb, None, dloc);
+        Ret(then, C_null(Type::i8p(ccx)), dloc);
+
+        // Type indicator for the exception being thrown.
+        // The first value in this tuple is a pointer to the exception object being thrown.
+        // The second value is a "selector" indicating which of the landing pad clauses
+        // the exception's type had been matched to.  rust_try ignores the selector.
+        let lpad_ty = Type::struct_(ccx, &[Type::i8p(ccx), Type::i32(ccx)],
+                                    false);
+        let vals = LandingPad(catch, lpad_ty, catch_pers, 1);
+        AddClause(catch, vals, C_null(Type::i8p(ccx)));
+        let ptr = ExtractValue(catch, vals, 0);
+        Ret(catch, ptr, dloc);
+        fcx.cleanup();
+
+        return rust_try
+    });
+
+    // Note that no invoke is used here because by definition this function
+    // can't panic (that's what it's catching).
+    let ret = Call(bcx, llfn, &[func, data], None, dloc);
+    Store(bcx, ret, dest);
+    return bcx;
+}
+
+// Helper to generate the `Ty` associated with `rust_try`
+fn get_rust_try_fn<'a, 'tcx>(fcx: &FunctionContext<'a, 'tcx>,
+                             f: &mut FnMut(Ty<'tcx>,
+                                           ty::FnOutput<'tcx>) -> ValueRef)
+                             -> ValueRef {
+    let ccx = fcx.ccx;
+    if let Some(llfn) = *ccx.rust_try_fn().borrow() {
+        return llfn
+    }
+
+    // Define the type up front for the signature of the rust_try function.
+    let tcx = ccx.tcx();
+    let i8p = tcx.mk_mut_ptr(tcx.types.i8);
+    let fn_ty = tcx.mk_bare_fn(ty::BareFnTy {
+        unsafety: ast::Unsafety::Unsafe,
+        abi: abi::Rust,
+        sig: ty::Binder(ty::FnSig {
+            inputs: vec![i8p],
+            output: ty::FnOutput::FnConverging(tcx.mk_nil()),
+            variadic: false,
+        }),
+    });
+    let fn_ty = tcx.mk_fn(None, fn_ty);
+    let output = ty::FnOutput::FnConverging(i8p);
+    let try_fn_ty  = tcx.mk_bare_fn(ty::BareFnTy {
+        unsafety: ast::Unsafety::Unsafe,
+        abi: abi::Rust,
+        sig: ty::Binder(ty::FnSig {
+            inputs: vec![fn_ty, i8p],
+            output: output,
+            variadic: false,
+        }),
+    });
+    let rust_try = f(tcx.mk_fn(None, try_fn_ty), output);
+    *ccx.rust_try_fn().borrow_mut() = Some(rust_try);
+    return rust_try
 }

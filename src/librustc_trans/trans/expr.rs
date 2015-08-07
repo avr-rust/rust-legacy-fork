@@ -61,14 +61,13 @@ use middle::traits;
 use trans::{_match, adt, asm, base, callee, closure, consts, controlflow};
 use trans::base::*;
 use trans::build::*;
-use trans::cleanup::{self, CleanupMethods};
+use trans::cleanup::{self, CleanupMethods, DropHintMethods};
 use trans::common::*;
 use trans::datum::*;
 use trans::debuginfo::{self, DebugLoc, ToDebugLoc};
 use trans::glue;
 use trans::machine;
 use trans::meth;
-use trans::monomorphize;
 use trans::tvec;
 use trans::type_of;
 use middle::cast::{CastKind, CastTy};
@@ -227,7 +226,7 @@ pub fn trans<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
             let const_ty = expr_ty_adjusted(bcx, expr);
             let llty = type_of::type_of(bcx.ccx(), const_ty);
             let global = PointerCast(bcx, global, llty.ptr_to());
-            let datum = Datum::new(global, const_ty, Lvalue);
+            let datum = Datum::new(global, const_ty, Lvalue::new("expr::trans"));
             return DatumBlock::new(bcx, datum.to_expr_datum());
         }
 
@@ -708,7 +707,7 @@ fn trans_field<'blk, 'tcx, F>(bcx: Block<'blk, 'tcx>,
                               base: &ast::Expr,
                               get_idx: F)
                               -> DatumBlock<'blk, 'tcx, Expr> where
-    F: FnOnce(&'blk ty::ctxt<'tcx>, &[ty::Field<'tcx>]) -> usize,
+    F: FnOnce(&'blk ty::ctxt<'tcx>, &VariantInfo<'tcx>) -> usize,
 {
     let mut bcx = bcx;
     let _icx = push_ctxt("trans_rec_field");
@@ -716,27 +715,26 @@ fn trans_field<'blk, 'tcx, F>(bcx: Block<'blk, 'tcx>,
     let base_datum = unpack_datum!(bcx, trans_to_lvalue(bcx, base, "field"));
     let bare_ty = base_datum.ty;
     let repr = adt::represent_type(bcx.ccx(), bare_ty);
-    with_field_tys(bcx.tcx(), bare_ty, None, move |discr, field_tys| {
-        let ix = get_idx(bcx.tcx(), field_tys);
-        let d = base_datum.get_element(
-            bcx,
-            field_tys[ix].mt.ty,
-            |srcval| adt::trans_field_ptr(bcx, &*repr, srcval, discr, ix));
+    let vinfo = VariantInfo::from_ty(bcx.tcx(), bare_ty, None);
 
-        if type_is_sized(bcx.tcx(), d.ty) {
-            DatumBlock { datum: d.to_expr_datum(), bcx: bcx }
-        } else {
-            let scratch = rvalue_scratch_datum(bcx, d.ty, "");
-            Store(bcx, d.val, get_dataptr(bcx, scratch.val));
-            let info = Load(bcx, get_len(bcx, base_datum.val));
-            Store(bcx, info, get_len(bcx, scratch.val));
+    let ix = get_idx(bcx.tcx(), &vinfo);
+    let d = base_datum.get_element(
+        bcx,
+        vinfo.fields[ix].1,
+        |srcval| adt::trans_field_ptr(bcx, &*repr, srcval, vinfo.discr, ix));
 
-            // Always generate an lvalue datum, because this pointer doesn't own
-            // the data and cleanup is scheduled elsewhere.
-            DatumBlock::new(bcx, Datum::new(scratch.val, scratch.ty, LvalueExpr))
-        }
-    })
+    if type_is_sized(bcx.tcx(), d.ty) {
+        DatumBlock { datum: d.to_expr_datum(), bcx: bcx }
+    } else {
+        let scratch = rvalue_scratch_datum(bcx, d.ty, "");
+        Store(bcx, d.val, get_dataptr(bcx, scratch.val));
+        let info = Load(bcx, get_len(bcx, base_datum.val));
+        Store(bcx, info, get_len(bcx, scratch.val));
 
+        // Always generate an lvalue datum, because this pointer doesn't own
+        // the data and cleanup is scheduled elsewhere.
+        DatumBlock::new(bcx, Datum::new(scratch.val, scratch.ty, LvalueExpr(d.kind)))
+    }
 }
 
 /// Translates `base.field`.
@@ -744,7 +742,7 @@ fn trans_rec_field<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                                base: &ast::Expr,
                                field: ast::Name)
                                -> DatumBlock<'blk, 'tcx, Expr> {
-    trans_field(bcx, base, |tcx, field_tys| tcx.field_idx_strict(field, field_tys))
+    trans_field(bcx, base, |_, vinfo| vinfo.field_index(field))
 }
 
 /// Translates `base.<idx>`.
@@ -810,10 +808,11 @@ fn trans_index<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                                                Some(SaveIn(scratch.val)),
                                                false));
             let datum = scratch.to_expr_datum();
+            let lval = Lvalue::new("expr::trans_index overload");
             if type_is_sized(bcx.tcx(), elt_ty) {
-                Datum::new(datum.to_llscalarish(bcx), elt_ty, LvalueExpr)
+                Datum::new(datum.to_llscalarish(bcx), elt_ty, LvalueExpr(lval))
             } else {
-                Datum::new(datum.val, elt_ty, LvalueExpr)
+                Datum::new(datum.val, elt_ty, LvalueExpr(lval))
             }
         }
         None => {
@@ -867,7 +866,8 @@ fn trans_index<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
             });
             let elt = InBoundsGEP(bcx, base, &[ix_val]);
             let elt = PointerCast(bcx, elt, type_of::type_of(ccx, unit_ty).ptr_to());
-            Datum::new(elt, unit_ty, LvalueExpr)
+            let lval = Lvalue::new("expr::trans_index fallback");
+            Datum::new(elt, unit_ty, LvalueExpr(lval))
         }
     };
 
@@ -912,7 +912,8 @@ fn trans_def<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                 // Case 2.
                 base::get_extern_const(bcx.ccx(), did, const_ty)
             };
-            DatumBlock::new(bcx, Datum::new(val, const_ty, LvalueExpr))
+            let lval = Lvalue::new("expr::trans_def");
+            DatumBlock::new(bcx, Datum::new(val, const_ty, LvalueExpr(lval)))
         }
         def::DefConst(_) => {
             bcx.sess().span_bug(ref_expr.span,
@@ -1001,10 +1002,26 @@ fn trans_rvalue_stmt_unadjusted<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                 debuginfo::set_source_location(bcx.fcx, expr.id, expr.span);
                 let src_datum = unpack_datum!(
                     bcx, src_datum.to_rvalue_datum(bcx, "ExprAssign"));
-                bcx = glue::drop_ty(bcx,
-                                    dst_datum.val,
-                                    dst_datum.ty,
-                                    expr.debug_loc());
+                let opt_hint_datum = dst_datum.kind.drop_flag_info.hint_datum(bcx);
+                let opt_hint_val = opt_hint_datum.map(|d|d.to_value());
+
+                // 1. Drop the data at the destination, passing the
+                //    drop-hint in case the lvalue has already been
+                //    dropped or moved.
+                bcx = glue::drop_ty_core(bcx,
+                                         dst_datum.val,
+                                         dst_datum.ty,
+                                         expr.debug_loc(),
+                                         false,
+                                         opt_hint_val);
+
+                // 2. We are overwriting the destination; ensure that
+                //    its drop-hint (if any) says "initialized."
+                if let Some(hint_val) = opt_hint_val {
+                    let hint_llval = hint_val.value();
+                    let drop_needed = C_u8(bcx.fcx.ccx, adt::DTOR_NEEDED_HINT);
+                    Store(bcx, drop_needed, hint_llval);
+                }
                 src_datum.store_to(bcx, dst_datum.val)
             } else {
                 src_datum.store_to(bcx, dst_datum.val)
@@ -1106,7 +1123,8 @@ fn trans_rvalue_dps_unadjusted<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                              None,
                              expr.span,
                              expr.id,
-                             tcx.mk_struct(did, tcx.mk_substs(substs)),
+                             tcx.mk_struct(tcx.lookup_adt_def(did),
+                                           tcx.mk_substs(substs)),
                              dest)
             } else {
                 tcx.sess.span_bug(expr.span,
@@ -1146,8 +1164,14 @@ fn trans_rvalue_dps_unadjusted<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                 SaveIn(lldest) => closure::Dest::SaveIn(bcx, lldest),
                 Ignore => closure::Dest::Ignore(bcx.ccx())
             };
-            closure::trans_closure_expr(dest, decl, body, expr.id, bcx.fcx.param_substs)
-                .unwrap_or(bcx)
+            let substs = match expr_ty(bcx, expr).sty {
+                ty::TyClosure(_, ref substs) => substs,
+                ref t =>
+                    bcx.tcx().sess.span_bug(
+                        expr.span,
+                        &format!("closure expr without closure type: {:?}", t)),
+            };
+            closure::trans_closure_expr(dest, decl, body, expr.id, substs).unwrap_or(bcx)
         }
         ast::ExprCall(ref f, ref args) => {
             if bcx.tcx().is_method_call(expr.id) {
@@ -1223,8 +1247,8 @@ fn trans_def_dps_unadjusted<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 
     match def {
         def::DefVariant(tid, vid, _) => {
-            let variant_info = bcx.tcx().enum_variant_with_id(tid, vid);
-            if !variant_info.args.is_empty() {
+            let variant = bcx.tcx().lookup_adt_def(tid).variant_with_id(vid);
+            if let ty::VariantKind::Tuple = variant.kind() {
                 // N-ary variant.
                 let llfn = callee::trans_fn_ref(bcx.ccx(), vid,
                                                 ExprId(ref_expr.id),
@@ -1235,15 +1259,14 @@ fn trans_def_dps_unadjusted<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                 // Nullary variant.
                 let ty = expr_ty(bcx, ref_expr);
                 let repr = adt::represent_type(bcx.ccx(), ty);
-                adt::trans_set_discr(bcx, &*repr, lldest,
-                                     variant_info.disr_val);
+                adt::trans_set_discr(bcx, &*repr, lldest, variant.disr_val);
                 return bcx;
             }
         }
         def::DefStruct(_) => {
             let ty = expr_ty(bcx, ref_expr);
             match ty.sty {
-                ty::TyStruct(did, _) if bcx.tcx().has_dtor(did) => {
+                ty::TyStruct(def, _) if def.has_dtor(bcx.tcx()) => {
                     let repr = adt::represent_type(bcx.ccx(), ty);
                     adt::trans_set_discr(bcx, &*repr, lldest, 0);
                 }
@@ -1268,14 +1291,22 @@ pub fn trans_def_fn_unadjusted<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
 
     match def {
         def::DefFn(did, _) |
-        def::DefStruct(did) | def::DefVariant(_, did, _) |
-        def::DefMethod(did, def::FromImpl(_)) => {
+        def::DefStruct(did) | def::DefVariant(_, did, _) => {
             callee::trans_fn_ref(ccx, did, ExprId(ref_expr.id), param_substs)
         }
-        def::DefMethod(impl_did, def::FromTrait(trait_did)) => {
-            meth::trans_static_method_callee(ccx, impl_did,
-                                             trait_did, ref_expr.id,
-                                             param_substs)
+        def::DefMethod(method_did) => {
+            match ccx.tcx().impl_or_trait_item(method_did).container() {
+                ty::ImplContainer(_) => {
+                    callee::trans_fn_ref(ccx, method_did,
+                                         ExprId(ref_expr.id),
+                                         param_substs)
+                }
+                ty::TraitContainer(trait_did) => {
+                    meth::trans_static_method_callee(ccx, method_did,
+                                                     trait_did, ref_expr.id,
+                                                     param_substs)
+                }
+            }
         }
         _ => {
             ccx.tcx().sess.span_bug(ref_expr.span, &format!(
@@ -1296,8 +1327,10 @@ pub fn trans_local_var<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
         def::DefUpvar(nid, _) => {
             // Can't move upvars, so this is never a ZeroMemLastUse.
             let local_ty = node_id_type(bcx, nid);
+            let lval = Lvalue::new_with_hint("expr::trans_local_var (upvar)",
+                                             bcx, nid, HintKind::ZeroAndMaintain);
             match bcx.fcx.llupvars.borrow().get(&nid) {
-                Some(&val) => Datum::new(val, local_ty, Lvalue),
+                Some(&val) => Datum::new(val, local_ty, lval),
                 None => {
                     bcx.sess().bug(&format!(
                         "trans_local_var: no llval for upvar {} found",
@@ -1326,71 +1359,6 @@ pub fn trans_local_var<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     }
 }
 
-/// Helper for enumerating the field types of structs, enums, or records. The optional node ID here
-/// is the node ID of the path identifying the enum variant in use. If none, this cannot possibly
-/// an enum variant (so, if it is and `node_id_opt` is none, this function panics).
-pub fn with_field_tys<'tcx, R, F>(tcx: &ty::ctxt<'tcx>,
-                                  ty: Ty<'tcx>,
-                                  node_id_opt: Option<ast::NodeId>,
-                                  op: F)
-                                  -> R where
-    F: FnOnce(ty::Disr, &[ty::Field<'tcx>]) -> R,
-{
-    match ty.sty {
-        ty::TyStruct(did, substs) => {
-            let fields = tcx.struct_fields(did, substs);
-            let fields = monomorphize::normalize_associated_type(tcx, &fields);
-            op(0, &fields[..])
-        }
-
-        ty::TyTuple(ref v) => {
-            let fields: Vec<_> = v.iter().enumerate().map(|(i, &f)| {
-                ty::Field {
-                    name: token::intern(&i.to_string()),
-                    mt: ty::TypeAndMut {
-                        ty: f,
-                        mutbl: ast::MutImmutable
-                    }
-                }
-            }).collect();
-            op(0, &fields)
-        }
-
-        ty::TyEnum(_, substs) => {
-            // We want the *variant* ID here, not the enum ID.
-            match node_id_opt {
-                None => {
-                    tcx.sess.bug(&format!(
-                        "cannot get field types from the enum type {:?} \
-                         without a node ID",
-                        ty));
-                }
-                Some(node_id) => {
-                    let def = tcx.def_map.borrow().get(&node_id).unwrap().full_def();
-                    match def {
-                        def::DefVariant(enum_id, variant_id, _) => {
-                            let variant_info = tcx.enum_variant_with_id(enum_id, variant_id);
-                            let fields = tcx.struct_fields(variant_id, substs);
-                            let fields = monomorphize::normalize_associated_type(tcx, &fields);
-                            op(variant_info.disr_val, &fields[..])
-                        }
-                        _ => {
-                            tcx.sess.bug("resolve didn't map this expr to a \
-                                          variant ID")
-                        }
-                    }
-                }
-            }
-        }
-
-        _ => {
-            tcx.sess.bug(&format!(
-                "cannot get field types from the type {:?}",
-                ty));
-        }
-    }
-}
-
 fn trans_struct<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                             fields: &[ast::Field],
                             base: Option<&ast::Expr>,
@@ -1401,52 +1369,42 @@ fn trans_struct<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let _icx = push_ctxt("trans_rec");
 
     let tcx = bcx.tcx();
-    with_field_tys(tcx, ty, Some(expr_id), |discr, field_tys| {
-        let mut need_base = vec![true; field_tys.len()];
+    let vinfo = VariantInfo::of_node(tcx, ty, expr_id);
 
-        let numbered_fields = fields.iter().map(|field| {
-            let opt_pos =
-                field_tys.iter().position(|field_ty|
-                                          field_ty.name == field.ident.node.name);
-            let result = match opt_pos {
-                Some(i) => {
-                    need_base[i] = false;
-                    (i, &*field.expr)
-                }
-                None => {
-                    tcx.sess.span_bug(field.span,
-                                      "Couldn't find field in struct type")
-                }
-            };
-            result
-        }).collect::<Vec<_>>();
-        let optbase = match base {
-            Some(base_expr) => {
-                let mut leftovers = Vec::new();
-                for (i, b) in need_base.iter().enumerate() {
-                    if *b {
-                        leftovers.push((i, field_tys[i].mt.ty));
-                    }
-                }
-                Some(StructBaseInfo {expr: base_expr,
-                                     fields: leftovers })
-            }
-            None => {
-                if need_base.iter().any(|b| *b) {
-                    tcx.sess.span_bug(expr_span, "missing fields and no base expr")
-                }
-                None
-            }
-        };
+    let mut need_base = vec![true; vinfo.fields.len()];
 
-        trans_adt(bcx,
-                  ty,
-                  discr,
-                  &numbered_fields,
-                  optbase,
-                  dest,
-                  DebugLoc::At(expr_id, expr_span))
-    })
+    let numbered_fields = fields.iter().map(|field| {
+        let pos = vinfo.field_index(field.ident.node.name);
+        need_base[pos] = false;
+        (pos, &*field.expr)
+    }).collect::<Vec<_>>();
+
+    let optbase = match base {
+        Some(base_expr) => {
+            let mut leftovers = Vec::new();
+            for (i, b) in need_base.iter().enumerate() {
+                if *b {
+                    leftovers.push((i, vinfo.fields[i].1));
+                }
+            }
+            Some(StructBaseInfo {expr: base_expr,
+                                 fields: leftovers })
+        }
+        None => {
+            if need_base.iter().any(|b| *b) {
+                tcx.sess.span_bug(expr_span, "missing fields and no base expr")
+            }
+            None
+        }
+    };
+
+    trans_adt(bcx,
+              ty,
+              vinfo.discr,
+              &numbered_fields,
+              optbase,
+              dest,
+              DebugLoc::At(expr_id, expr_span))
 }
 
 /// Information that `trans_adt` needs in order to fill in the fields
@@ -1495,7 +1453,7 @@ pub fn trans_adt<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
     // panic occur before the ADT as a whole is ready.
     let custom_cleanup_scope = fcx.push_custom_cleanup_scope();
 
-    if ty.is_simd(bcx.tcx()) {
+    if ty.is_simd() {
         // Issue 23112: The original logic appeared vulnerable to same
         // order-of-eval bug. But, SIMD values are tuple-structs;
         // i.e. functional record update (FRU) syntax is unavailable.
@@ -1568,7 +1526,8 @@ pub fn trans_adt<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             bcx = trans_into(bcx, &**e, SaveIn(dest));
             let scope = cleanup::CustomScope(custom_cleanup_scope);
             fcx.schedule_lifetime_end(scope, dest);
-            fcx.schedule_drop_mem(scope, dest, e_ty);
+            // FIXME: nonzeroing move should generalize to fields
+            fcx.schedule_drop_mem(scope, dest, e_ty, None);
         }
     }
 
@@ -1738,7 +1697,7 @@ fn trans_eager_binop<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let _icx = push_ctxt("trans_eager_binop");
 
     let tcx = bcx.tcx();
-    let is_simd = lhs_t.is_simd(tcx);
+    let is_simd = lhs_t.is_simd();
     let intype = if is_simd {
         lhs_t.simd_type(tcx)
     } else {
@@ -2089,8 +2048,8 @@ fn trans_imm_cast<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
         }
     }
 
-    let r_t_in = CastTy::from_ty(bcx.tcx(), t_in).expect("bad input type for cast");
-    let r_t_out = CastTy::from_ty(bcx.tcx(), t_out).expect("bad output type for cast");
+    let r_t_in = CastTy::from_ty(t_in).expect("bad input type for cast");
+    let r_t_out = CastTy::from_ty(t_out).expect("bad output type for cast");
 
     let (llexpr, signed) = if let Int(CEnum) = r_t_in {
         let repr = adt::represent_type(ccx, t_in);
@@ -2261,7 +2220,7 @@ fn deref_once<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 
             if type_is_sized(bcx.tcx(), content_ty) {
                 let ptr = load_ty(bcx, datum.val, datum.ty);
-                DatumBlock::new(bcx, Datum::new(ptr, content_ty, LvalueExpr))
+                DatumBlock::new(bcx, Datum::new(ptr, content_ty, LvalueExpr(datum.kind)))
             } else {
                 // A fat pointer and a DST lvalue have the same representation
                 // just different types. Since there is no temporary for `*e`
@@ -2269,13 +2228,15 @@ fn deref_once<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                 // object code path for running drop glue and free. Instead,
                 // we schedule cleanup for `e`, turning it into an lvalue.
 
-                let datum = Datum::new(datum.val, content_ty, LvalueExpr);
+                let lval = Lvalue::new("expr::deref_once ty_uniq");
+                let datum = Datum::new(datum.val, content_ty, LvalueExpr(lval));
                 DatumBlock::new(bcx, datum)
             }
         }
 
         ty::TyRawPtr(ty::TypeAndMut { ty: content_ty, .. }) |
         ty::TyRef(_, ty::TypeAndMut { ty: content_ty, .. }) => {
+            let lval = Lvalue::new("expr::deref_once ptr");
             if type_is_sized(bcx.tcx(), content_ty) {
                 let ptr = datum.to_llscalarish(bcx);
 
@@ -2284,18 +2245,18 @@ fn deref_once<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                 // rvalue for non-owning pointers like &T or *T, in which
                 // case cleanup *is* scheduled elsewhere, by the true
                 // owner (or, in the case of *T, by the user).
-                DatumBlock::new(bcx, Datum::new(ptr, content_ty, LvalueExpr))
+                DatumBlock::new(bcx, Datum::new(ptr, content_ty, LvalueExpr(lval)))
             } else {
                 // A fat pointer and a DST lvalue have the same representation
                 // just different types.
-                DatumBlock::new(bcx, Datum::new(datum.val, content_ty, LvalueExpr))
+                DatumBlock::new(bcx, Datum::new(datum.val, content_ty, LvalueExpr(lval)))
             }
         }
 
         _ => {
             bcx.tcx().sess.span_bug(
                 expr.span,
-                &format!("deref invoked on expr of illegal type {:?}",
+                &format!("deref invoked on expr of invalid type {:?}",
                         datum.ty));
         }
     };
@@ -2541,7 +2502,7 @@ fn build_unchecked_rshift<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     // #1877, #10183: Ensure that input is always valid
     let rhs = shift_mask_rhs(bcx, rhs, binop_debug_loc);
     let tcx = bcx.tcx();
-    let is_simd = lhs_t.is_simd(tcx);
+    let is_simd = lhs_t.is_simd();
     let intype = if is_simd {
         lhs_t.simd_type(tcx)
     } else {

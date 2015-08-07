@@ -33,9 +33,7 @@
 #![feature(alloc)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(core)]
 #![feature(core_intrinsics)]
-#![feature(core_prelude)]
 #![feature(core_slice_ext)]
 #![feature(core_str_ext)]
 #![feature(heap_api)]
@@ -62,12 +60,12 @@
 #![feature(utf8_error)]
 #![cfg_attr(test, feature(rand, test))]
 #![cfg_attr(not(test), feature(str_words))]
+#![cfg_attr(stage0, feature(core, core_prelude))]
 
 #![feature(no_std)]
 #![no_std]
 
-#[macro_use]
-extern crate core;
+#[cfg(stage0)] #[macro_use] extern crate core;
 
 extern crate rustc_unicode;
 extern crate alloc;
@@ -87,6 +85,7 @@ pub use enum_set::EnumSet;
 pub use vec_deque::VecDeque;
 pub use string::String;
 pub use vec::Vec;
+#[allow(deprecated)]
 pub use vec_map::VecMap;
 
 // Needed for the vec! macro
@@ -108,6 +107,7 @@ pub mod str;
 pub mod string;
 pub mod vec;
 pub mod vec_deque;
+#[allow(deprecated)]
 pub mod vec_map;
 
 #[unstable(feature = "bitvec", reason = "RFC 509")]
@@ -132,13 +132,6 @@ pub mod btree_map {
 pub mod btree_set {
     pub use btree::set::*;
 }
-
-
-// FIXME(#14344) this shouldn't be necessary
-#[doc(hidden)]
-#[unstable(feature = "issue_14344_fixme")]
-#[cfg(stage0)]
-pub fn fixme_14344_be_sure_to_link_to_collections() {}
 
 #[cfg(not(test))]
 mod std {

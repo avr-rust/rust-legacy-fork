@@ -56,6 +56,7 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
+#[allow(deprecated)]
 use self::MinMaxResult::*;
 
 use clone::Clone;
@@ -445,6 +446,7 @@ pub trait Iterator {
     /// ```
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[allow(deprecated)]
     fn scan<St, B, F>(self, initial_state: St, f: F) -> Scan<Self, St, F>
         where Self: Sized, F: FnMut(&mut St, Self::Item) -> Option<B>,
     {
@@ -822,7 +824,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(iter_min_max)]
+    /// #![feature(iter_min_max)]
+    ///
     /// use std::iter::MinMaxResult::{NoElements, OneElement, MinMax};
     ///
     /// let a: [i32; 0] = [];
@@ -840,6 +843,8 @@ pub trait Iterator {
     #[unstable(feature = "iter_min_max",
                reason = "return type may change or may wish to have a closure \
                          based version as well")]
+    #[deprecated(since = "1.3.0", reason = "has not proven itself")]
+    #[allow(deprecated)]
     fn min_max(mut self) -> MinMaxResult<Self::Item> where Self: Sized, Self::Item: Ord
     {
         let (mut min, mut max) = match self.next() {
@@ -894,7 +899,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(iter_cmp)]
+    /// #![feature(iter_cmp)]
+    ///
     /// let a = [-3_i32, 0, 1, 5, -10];
     /// assert_eq!(*a.iter().max_by(|x| x.abs()).unwrap(), -10);
     /// ```
@@ -922,7 +928,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(iter_cmp)]
+    /// #![feature(iter_cmp)]
+    ///
     /// let a = [-3_i32, 0, 1, 5, -10];
     /// assert_eq!(*a.iter().min_by(|x| x.abs()).unwrap(), 0);
     /// ```
@@ -1061,7 +1068,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(iter_arith)]
+    /// #![feature(iter_arith)]
+    ///
     /// let a = [1, 2, 3, 4, 5];
     /// let it = a.iter();
     /// assert_eq!(it.sum::<i32>(), 15);
@@ -1079,7 +1087,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(iter_arith)]
+    /// #![feature(iter_arith)]
+    ///
     /// fn factorial(n: u32) -> u32 {
     ///     (1..).take_while(|&i| i <= n).product()
     /// }
@@ -1336,6 +1345,8 @@ impl<I> RandomAccessIterator for Rev<I>
 #[derive(Clone, PartialEq, Debug)]
 #[unstable(feature = "iter_min_max",
            reason = "unclear whether such a fine-grained result is widely useful")]
+#[deprecated(since = "1.3.0", reason = "has not proven itself")]
+#[allow(deprecated)]
 pub enum MinMaxResult<T> {
     /// Empty iterator
     NoElements,
@@ -1349,6 +1360,8 @@ pub enum MinMaxResult<T> {
 }
 
 #[unstable(feature = "iter_min_max", reason = "type is unstable")]
+#[deprecated(since = "1.3.0", reason = "has not proven itself")]
+#[allow(deprecated)]
 impl<T: Clone> MinMaxResult<T> {
     /// `into_option` creates an `Option` of type `(T,T)`. The returned `Option`
     /// has variant `None` if and only if the `MinMaxResult` has variant
@@ -1359,7 +1372,8 @@ impl<T: Clone> MinMaxResult<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(iter_min_max)]
+    /// #![feature(iter_min_max)]
+    ///
     /// use std::iter::MinMaxResult::{self, NoElements, OneElement, MinMax};
     ///
     /// let r: MinMaxResult<i32> = NoElements;
@@ -2249,6 +2263,7 @@ impl<I> ExactSizeIterator for Take<I> where I: ExactSizeIterator {}
 #[must_use = "iterator adaptors are lazy and do nothing unless consumed"]
 #[stable(feature = "rust1", since = "1.0.0")]
 #[derive(Clone)]
+#[allow(deprecated)]
 pub struct Scan<I, St, F> {
     iter: I,
     f: F,
@@ -2256,6 +2271,7 @@ pub struct Scan<I, St, F> {
     /// The current internal state to be passed to the closure next.
     #[unstable(feature = "scan_state",
                reason = "public fields are otherwise rare in the stdlib")]
+    #[deprecated(since = "1.3.0", reason = "unclear whether this is necessary")]
     pub state: St,
 }
 
@@ -2267,6 +2283,7 @@ impl<B, I, St, F> Iterator for Scan<I, St, F> where
     type Item = B;
 
     #[inline]
+    #[allow(deprecated)]
     fn next(&mut self) -> Option<B> {
         self.iter.next().and_then(|a| (self.f)(&mut self.state, a))
     }
@@ -2448,6 +2465,8 @@ impl<I> Fuse<I> {
     /// previously returned `None`.
     #[inline]
     #[unstable(feature = "iter_reset_fuse", reason = "seems marginal")]
+    #[deprecated(since = "1.3.0",
+                 reason = "unusual for adaptors to have one-off methods")]
     pub fn reset_fuse(&mut self) {
         self.done = false
     }
@@ -2555,7 +2574,7 @@ impl<I: RandomAccessIterator, F> RandomAccessIterator for Inspect<I, F>
 #[unstable(feature = "iter_unfold")]
 #[derive(Clone)]
 #[deprecated(since = "1.2.0",
-             reason = "has gained enough traction to retain its position \
+             reason = "has not gained enough traction to retain its position \
                        in the standard library")]
 #[allow(deprecated)]
 pub struct Unfold<St, F> {
@@ -2567,7 +2586,7 @@ pub struct Unfold<St, F> {
 
 #[unstable(feature = "iter_unfold")]
 #[deprecated(since = "1.2.0",
-             reason = "has gained enough traction to retain its position \
+             reason = "has not gained enough traction to retain its position \
                        in the standard library")]
 #[allow(deprecated)]
 impl<A, St, F> Unfold<St, F> where F: FnMut(&mut St) -> Option<A> {
@@ -2751,7 +2770,8 @@ impl<A: Step> ops::Range<A> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(step_by)]
+    /// #![feature(step_by)]
+    ///
     /// for i in (0..10).step_by(2) {
     ///     println!("{}", i);
     /// }
@@ -3018,7 +3038,7 @@ type IterateState<T, F> = (F, Option<T>, bool);
 /// from a given seed value.
 #[unstable(feature = "iter_iterate")]
 #[deprecated(since = "1.2.0",
-             reason = "has gained enough traction to retain its position \
+             reason = "has not gained enough traction to retain its position \
                        in the standard library")]
 #[allow(deprecated)]
 pub type Iterate<T, F> = Unfold<IterateState<T, F>, fn(&mut IterateState<T, F>) -> Option<T>>;
@@ -3027,7 +3047,7 @@ pub type Iterate<T, F> = Unfold<IterateState<T, F>, fn(&mut IterateState<T, F>) 
 /// repeated applications of the given function `f`.
 #[unstable(feature = "iter_iterate")]
 #[deprecated(since = "1.2.0",
-             reason = "has gained enough traction to retain its position \
+             reason = "has not gained enough traction to retain its position \
                        in the standard library")]
 #[allow(deprecated)]
 pub fn iterate<T, F>(seed: T, f: F) -> Iterate<T, F> where

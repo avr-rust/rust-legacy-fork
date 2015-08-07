@@ -14,7 +14,8 @@
 //! # Examples
 //!
 //! ```
-//! # #![feature(future)]
+//! #![feature(future)]
+//!
 //! use std::sync::Future;
 //!
 //! // a fake, for now
@@ -38,7 +39,8 @@
                         outside in crates.io first")]
 #![allow(deprecated)]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 use core::mem::replace;
 
 use boxed::Box;

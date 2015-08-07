@@ -367,7 +367,13 @@ impl<'t, 'a,'tcx> MemCategorizationContext<'t, 'a, 'tcx> {
     }
 
     fn expr_ty(&self, expr: &ast::Expr) -> McResult<Ty<'tcx>> {
-        self.typer.node_ty(expr.id)
+        match self.typer.node_ty(expr.id) {
+            Ok(t) => Ok(t),
+            Err(()) => {
+                debug!("expr_ty({:?}) yielded Err", expr);
+                Err(())
+            }
+        }
     }
 
     fn expr_ty_adjusted(&self, expr: &ast::Expr) -> McResult<Ty<'tcx>> {
@@ -1210,7 +1216,7 @@ impl<'t, 'a,'tcx> MemCategorizationContext<'t, 'a, 'tcx> {
         let cmt = match opt_def {
             Some(def::DefVariant(enum_did, variant_did, _))
                 // univariant enums do not need downcasts
-                if !self.tcx().enum_is_univariant(enum_did) => {
+                if !self.tcx().lookup_adt_def(enum_did).is_univariant() => {
                     self.cat_downcast(pat, cmt.clone(), cmt.ty, variant_did)
                 }
             _ => cmt

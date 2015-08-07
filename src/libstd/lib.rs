@@ -13,12 +13,11 @@
 //! The Rust Standard Library is the foundation of portable Rust
 //! software, a set of minimal and battle-tested shared abstractions
 //! for the [broader Rust ecosystem](https://crates.io). It offers
-//! core types (e.g. [`Vec`](vec/index.html)
-//! and [`Option`](option/index.html)), library-defined [operations on
-//! language primitives](#primitive) (e.g. [`u32`](u32/index.html) and
-//! [`str`](str/index.html)), [standard macros](#macros),
+//! core types, like [`Vec`](vec/index.html)
+//! and [`Option`](option/index.html), library-defined [operations on
+//! language primitives](#primitives), [standard macros](#macros),
 //! [I/O](io/index.html) and [multithreading](thread/index.html), among
-//! [many other lovely
+//! [many other
 //! things](#what-is-in-the-standard-library-documentation?).
 //!
 //! `std` is available to all Rust crates by default, just as if each
@@ -65,8 +64,6 @@
 //!
 //! # What is in the standard library documentation?
 //!
-//! Lots of stuff. Well, broadly four things actually.
-//!
 //! First of all, The Rust Standard Library is divided into a number
 //! of focused modules, [all listed further down this page](#modules).
 //! These modules are the bedrock upon which all of Rust is forged,
@@ -89,7 +86,7 @@
 //!
 //! So for example there is a [page for the primitive type
 //! `i32`](primitive.i32.html) that lists all the methods that can be
-//! called on 32-bit integers (mega useful), and there is a [page for
+//! called on 32-bit integers (very useful), and there is a [page for
 //! the module `std::i32`](i32/index.html) that documents the constant
 //! values `MIN` and `MAX` (rarely useful).
 //!
@@ -99,9 +96,7 @@
 //! [`String`](string/struct.String.html) and
 //! [`Vec`](vec/struct.Vec.html) are actually calls to methods on
 //! `str` and `[T]` respectively, via [deref
-//! coercions](../book/deref-coercions.html). *Accepting that
-//! primitive types are documented on their own pages will bring you a
-//! deep inner wisdom. Embrace it now before proceeding.*
+//! coercions](../book/deref-coercions.html).
 //!
 //! Third, the standard library defines [The Rust
 //! Prelude](prelude/index.html), a small collection of items - mostly
@@ -209,6 +204,7 @@
 #![feature(borrow_state)]
 #![feature(box_raw)]
 #![feature(box_syntax)]
+#![feature(char_from_unchecked)]
 #![feature(char_internals)]
 #![feature(clone_from_slice)]
 #![feature(collections)]
@@ -217,7 +213,6 @@
 #![feature(core)]
 #![feature(core_float)]
 #![feature(core_intrinsics)]
-#![feature(core_prelude)]
 #![feature(core_simd)]
 #![feature(drain)]
 #![feature(fnbox)]
@@ -230,10 +225,10 @@
 #![feature(linkage, thread_local, asm)]
 #![feature(macro_reexport)]
 #![feature(slice_concat_ext)]
-#![feature(slice_position_elem)]
 #![feature(no_std)]
 #![feature(oom)]
 #![feature(optin_builtin_traits)]
+#![feature(placement_in_syntax)]
 #![feature(rand)]
 #![feature(raw)]
 #![feature(reflect_marker)]
@@ -254,6 +249,7 @@
 #![cfg_attr(test, feature(float_from_str_radix, range_inclusive, float_extras, hash_default))]
 #![cfg_attr(test, feature(test, rustc_private, float_consts))]
 #![cfg_attr(target_env = "msvc", feature(link_args))]
+#![cfg_attr(stage0, feature(core, core_prelude))]
 
 // Don't link to std. We are std.
 #![no_std]
@@ -261,13 +257,17 @@
 #![allow(trivial_casts)]
 #![deny(missing_docs)]
 
+#[cfg(stage0)] #[macro_use] extern crate core;
+
 #[cfg(test)] extern crate test;
 #[cfg(test)] #[macro_use] extern crate log;
 
-#[macro_use]
+// We want to reexport a few macros from core but libcore has already been
+// imported by the compiler (via our #[no_std] attribute) In this case we just
+// add a new crate name so we can attach the reexports to it.
 #[macro_reexport(assert, assert_eq, debug_assert, debug_assert_eq,
     unreachable, unimplemented, write, writeln)]
-extern crate core;
+extern crate core as __core;
 
 #[macro_use]
 #[macro_reexport(vec, format)]
@@ -280,28 +280,23 @@ extern crate libc;
 
 #[macro_use] #[no_link] extern crate rustc_bitflags;
 
-// Make std testable by not duplicating lang items. See #2912
+// Make std testable by not duplicating lang items and other globals. See #2912
 #[cfg(test)] extern crate std as realstd;
-#[cfg(test)] pub use realstd::marker;
-#[cfg(test)] pub use realstd::ops;
-#[cfg(test)] pub use realstd::cmp;
-#[cfg(test)] pub use realstd::boxed;
-
 
 // NB: These reexports are in the order they should be listed in rustdoc
 
 pub use core::any;
 pub use core::cell;
 pub use core::clone;
-#[cfg(not(test))] pub use core::cmp;
+pub use core::cmp;
 pub use core::convert;
 pub use core::default;
 pub use core::hash;
 pub use core::intrinsics;
 pub use core::iter;
-#[cfg(not(test))] pub use core::marker;
+pub use core::marker;
 pub use core::mem;
-#[cfg(not(test))] pub use core::ops;
+pub use core::ops;
 pub use core::ptr;
 pub use core::raw;
 pub use core::simd;
@@ -309,7 +304,7 @@ pub use core::result;
 pub use core::option;
 pub mod error;
 
-#[cfg(not(test))] pub use alloc::boxed;
+pub use alloc::boxed;
 pub use alloc::rc;
 
 pub use core_collections::borrow;
@@ -415,34 +410,7 @@ pub mod __rand {
     pub use rand::{thread_rng, ThreadRng, Rng};
 }
 
-// Modules that exist purely to document + host impl docs for primitive types
-
-mod array;
-mod bool;
-mod unit;
-mod tuple;
-
-// A curious inner-module that's not exported that contains the binding
-// 'std' so that macro-expanded references to std::error and such
-// can be resolved within libstd.
-#[doc(hidden)]
-mod std {
-    pub use sync; // used for select!()
-    pub use error; // used for try!()
-    pub use fmt; // used for any formatting strings
-    pub use option; // used for thread_local!{}
-    pub use rt; // used for panic!()
-    pub use vec; // used for vec![]
-    pub use cell; // used for tls!
-    pub use thread; // used for thread_local!
-    pub use marker;  // used for tls!
-
-    // The test runner calls ::std::env::args() but really wants realstd
-    #[cfg(test)] pub use realstd::env as env;
-    // The test runner requires std::slice::Vector, so re-export std::slice just for it.
-    //
-    // It is also used in vec![]
-    pub use slice;
-
-    pub use boxed; // used for vec![]
-}
+// Include a number of private modules that exist solely to provide
+// the rustdoc documentation for primitive types. Using `include!`
+// because rustdoc only looks for these modules at the crate level.
+include!("primitive_docs.rs");

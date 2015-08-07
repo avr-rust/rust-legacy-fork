@@ -40,7 +40,7 @@ use std::path::Path;
 
 use syntax::ast::{self, NodeId, DefId};
 use syntax::codemap::*;
-use syntax::parse::token::{self, get_ident, keywords};
+use syntax::parse::token::{self, keywords};
 use syntax::owned_slice::OwnedSlice;
 use syntax::visit::{self, Visitor};
 use syntax::print::pprust::{path_to_string, ty_to_string};
@@ -302,7 +302,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
             return;
         }
 
-        debug!("process_method: {}:{}", id, token::get_name(name));
+        debug!("process_method: {}:{}", id, name);
 
         let method_data = self.save_ctxt.get_method_data(id, name, span);
 
@@ -459,7 +459,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
         self.fmt.static_str(span,
                             sub_span,
                             id,
-                            &get_ident((*ident).clone()),
+                            &ident.name.as_str(),
                             &qualname,
                             &self.span.snippet(expr.span),
                             &ty_to_string(&*typ),
@@ -478,7 +478,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
 
         let ctor_id = match def.ctor_id {
             Some(node_id) => node_id,
-            None => -1,
+            None => ast::DUMMY_NODE_ID,
         };
         let val = self.span.snippet(item.span);
         let sub_span = self.span.sub_span_after_keyword(item.span, keywords::Struct);
@@ -513,7 +513,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
                           &enum_data.value);
 
         for variant in &enum_definition.variants {
-            let name = &get_ident(variant.node.name);
+            let name = &variant.node.name.name.as_str();
             let mut qualname = enum_data.qualname.clone();
             qualname.push_str("::");
             qualname.push_str(name);
@@ -536,7 +536,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
                 ast::StructVariantKind(ref struct_def) => {
                     let ctor_id = match struct_def.ctor_id {
                         Some(node_id) => node_id,
-                        None => -1,
+                        None => ast::DUMMY_NODE_ID,
                     };
                     self.fmt.struct_variant_str(variant.span,
                                                 self.span.span_for_first_ident(variant.span),
@@ -671,6 +671,15 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
         }
 
         let path_data = self.save_ctxt.get_path_data(id, path);
+        let path_data = match path_data {
+            Some(pd) => pd,
+            None => {
+                self.tcx.sess.span_bug(path.span,
+                                       &format!("Unexpected def kind while looking \
+                                                 up path in `{}`",
+                                                self.span.snippet(path.span)))
+            }
+        };
         match path_data {
             Data::VariableRefData(ref vrd) => {
                 self.fmt.ref_str(ref_kind.unwrap_or(recorder::VarRef),
@@ -710,7 +719,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
         let def_map = self.tcx.def_map.borrow();
         let def = def_map.get(&id).unwrap().full_def();
         match def {
-            def::DefMethod(did, _) => {
+            def::DefMethod(did) => {
                 let ti = self.tcx.impl_or_trait_item(did);
                 if let ty::MethodTraitItem(m) = ti {
                     if m.explicit_self == ty::StaticExplicitSelfCategory {
@@ -733,6 +742,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
                           ex: &ast::Expr,
                           path: &ast::Path,
                           fields: &Vec<ast::Field>,
+                          variant: ty::VariantDef,
                           base: &Option<P<ast::Expr>>) {
         if generated_code(path.span) {
             return
@@ -747,7 +757,6 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
                              Some(struct_lit_data.span),
                              struct_lit_data.ref_id,
                              struct_lit_data.scope);
-            let struct_def = struct_lit_data.ref_id;
             let scope = self.save_ctxt.enclosing_scope(ex.id);
 
             for field in fields {
@@ -756,7 +765,7 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
                 }
 
                 let field_data = self.save_ctxt.get_field_ref_data(field,
-                                                                   struct_def,
+                                                                   variant,
                                                                    scope);
                 self.fmt.ref_str(recorder::VarRef,
                                  field.ident.span,
@@ -795,43 +804,24 @@ impl <'l, 'tcx> DumpCsvVisitor<'l, 'tcx> {
         match p.node {
             ast::PatStruct(ref path, ref fields, _) => {
                 visit::walk_path(self, path);
+                let adt = self.tcx.node_id_to_type(p.id).ty_adt_def().unwrap();
+                let def = self.tcx.def_map.borrow()[&p.id].full_def();
+                let variant = adt.variant_of_def(def);
 
-                let def = self.tcx.def_map.borrow().get(&p.id).unwrap().full_def();
-                let struct_def = match def {
-                    def::DefConst(..) | def::DefAssociatedConst(..) => None,
-                    def::DefVariant(_, variant_id, _) => Some(variant_id),
-                    _ => {
-                        match self.tcx.node_id_to_type(p.id).ty_to_def_id() {
-                            None => {
-                                self.sess.span_bug(p.span,
-                                                   &format!("Could not find struct_def for `{}`",
-                                                            self.span.snippet(p.span)));
-                            }
-                            Some(def_id) => Some(def_id),
-                        }
+                for &Spanned { node: ref field, span } in fields {
+                    if generated_code(span) {
+                        continue;
                     }
-                };
 
-                if let Some(struct_def) = struct_def {
-                    let struct_fields = self.tcx.lookup_struct_fields(struct_def);
-                    for &Spanned { node: ref field, span } in fields {
-                        if generated_code(span) {
-                            continue;
-                        }
-
-                        let sub_span = self.span.span_for_first_ident(span);
-                        for f in &struct_fields {
-                            if f.name == field.ident.name {
-                                self.fmt.ref_str(recorder::VarRef,
-                                                 span,
-                                                 sub_span,
-                                                 f.id,
-                                                 self.cur_scope);
-                                break;
-                            }
-                        }
-                        self.visit_pat(&field.pat);
+                    let sub_span = self.span.span_for_first_ident(span);
+                    if let Some(f) = variant.find_field_named(field.ident.name) {
+                        self.fmt.ref_str(recorder::VarRef,
+                                         span,
+                                         sub_span,
+                                         f.did,
+                                         self.cur_scope);
                     }
+                    self.visit_pat(&field.pat);
                 }
             }
             _ => visit::walk_pat(self, p)
@@ -877,7 +867,7 @@ impl<'l, 'tcx, 'v> Visitor<'v> for DumpCsvVisitor<'l, 'tcx> {
                                                sub_span,
                                                item.id,
                                                mod_id,
-                                               &get_ident(ident),
+                                               &ident.name.as_str(),
                                                self.cur_scope);
                         self.write_sub_paths_truncated(path, true);
                     }
@@ -891,7 +881,7 @@ impl<'l, 'tcx, 'v> Visitor<'v> for DumpCsvVisitor<'l, 'tcx> {
                                 if !name_string.is_empty() {
                                     name_string.push_str(", ");
                                 }
-                                name_string.push_str(n.as_str());
+                                name_string.push_str(&n.as_str());
                             }
                         }
 
@@ -931,11 +921,9 @@ impl<'l, 'tcx, 'v> Visitor<'v> for DumpCsvVisitor<'l, 'tcx> {
                 }
             }
             ast::ItemExternCrate(ref s) => {
-                let name = get_ident(item.ident);
-                let name = &name;
                 let location = match *s {
                     Some(s) => s.to_string(),
-                    None => name.to_string(),
+                    None => item.ident.to_string(),
                 };
                 let alias_span = self.span.span_for_last_ident(item.span);
                 let cnum = match self.sess.cstore.find_extern_mod_stmt_cnum(item.id) {
@@ -946,7 +934,7 @@ impl<'l, 'tcx, 'v> Visitor<'v> for DumpCsvVisitor<'l, 'tcx> {
                                           alias_span,
                                           item.id,
                                           cnum,
-                                          name,
+                                          &item.ident.name.as_str(),
                                           &location,
                                           self.cur_scope);
             }
@@ -1084,8 +1072,15 @@ impl<'l, 'tcx, 'v> Visitor<'v> for DumpCsvVisitor<'l, 'tcx> {
                 self.process_path(ex.id, path, None);
                 visit::walk_expr(self, ex);
             }
-            ast::ExprStruct(ref path, ref fields, ref base) =>
-                self.process_struct_lit(ex, path, fields, base),
+            ast::ExprStruct(ref path, ref fields, ref base) => {
+                let adt = self.tcx.expr_ty(ex).ty_adt_def().unwrap();
+                let def = self.tcx.resolve_expr(ex);
+                self.process_struct_lit(ex,
+                                        path,
+                                        fields,
+                                        adt.variant_of_def(def),
+                                        base)
+            }
             ast::ExprMethodCall(_, _, ref args) => self.process_method_call(ex, args),
             ast::ExprField(ref sub_ex, _) => {
                 if generated_code(sub_ex.span) {
@@ -1112,19 +1107,13 @@ impl<'l, 'tcx, 'v> Visitor<'v> for DumpCsvVisitor<'l, 'tcx> {
 
                 let ty = &self.tcx.expr_ty_adjusted(&**sub_ex).sty;
                 match *ty {
-                    ty::TyStruct(def_id, _) => {
-                        let fields = self.tcx.lookup_struct_fields(def_id);
-                        for (i, f) in fields.iter().enumerate() {
-                            if i == idx.node {
-                                let sub_span = self.span.sub_span_after_token(ex.span, token::Dot);
-                                self.fmt.ref_str(recorder::VarRef,
-                                                 ex.span,
-                                                 sub_span,
-                                                 f.id,
-                                                 self.cur_scope);
-                                break;
-                            }
-                        }
+                    ty::TyStruct(def, _) => {
+                        let sub_span = self.span.sub_span_after_token(ex.span, token::Dot);
+                        self.fmt.ref_str(recorder::VarRef,
+                                         ex.span,
+                                         sub_span,
+                                         def.struct_variant().fields[idx.node].did,
+                                         self.cur_scope);
                     }
                     ty::TyTuple(_) => {}
                     _ => self.sess.span_bug(ex.span,

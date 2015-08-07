@@ -56,10 +56,9 @@ impl<'a> ParserAnyMacro<'a> {
             let span = parser.span;
             parser.span_err(span, &msg[..]);
 
-            let name = token::get_ident(self.macro_ident);
             let msg = format!("caused by the macro expansion here; the usage \
                                of `{}` is likely invalid in this context",
-                               name);
+                               self.macro_ident);
             parser.span_note(self.site_span, &msg[..]);
         }
     }
@@ -118,6 +117,12 @@ impl<'a> MacResult for ParserAnyMacro<'a> {
         self.ensure_complete_parse(false);
         Some(ret)
     }
+
+    fn make_ty(self: Box<ParserAnyMacro<'a>>) -> Option<P<ast::Ty>> {
+        let ret = self.parser.borrow_mut().parse_ty();
+        self.ensure_complete_parse(true);
+        Some(ret)
+    }
 }
 
 struct MacroRulesMacroExpander {
@@ -154,7 +159,7 @@ fn generic_extension<'cx>(cx: &'cx ExtCtxt,
                           -> Box<MacResult+'cx> {
     if cx.trace_macros() {
         println!("{}! {{ {} }}",
-                 token::get_ident(name),
+                 name,
                  print::pprust::tts_to_string(arg));
     }
 
@@ -302,8 +307,8 @@ fn check_lhs_nt_follows(cx: &mut ExtCtxt, lhs: &NamedMatch, sp: Span) {
             tt @ &TtSequence(..) => {
                 check_matcher(cx, Some(tt).into_iter(), &Eof);
             },
-            _ => cx.span_bug(sp, "wrong-structured lhs for follow check (didn't find \
-            a TtDelimited or TtSequence)")
+            _ => cx.span_err(sp, "Invalid macro matcher; matchers must be contained \
+               in balanced delimiters or a repetition indicator")
         },
         _ => cx.span_bug(sp, "wrong-structured lhs for follow check (didn't find a \
            MatchedNonterminal)")
@@ -326,7 +331,7 @@ fn check_matcher<'a, I>(cx: &mut ExtCtxt, matcher: I, follow: &Token)
             TtToken(sp, MatchNt(ref name, ref frag_spec, _, _)) => {
                 // ii. If T is a simple NT, look ahead to the next token T' in
                 // M. If T' is in the set FOLLOW(NT), continue. Else; reject.
-                if can_be_followed_by_any(frag_spec.as_str()) {
+                if can_be_followed_by_any(&frag_spec.name.as_str()) {
                     continue
                 } else {
                     let next_token = match tokens.peek() {
@@ -340,13 +345,13 @@ fn check_matcher<'a, I>(cx: &mut ExtCtxt, matcher: I, follow: &Token)
                             // possibility that the sequence occurred
                             // zero times (in which case we need to
                             // look at the token that follows the
-                            // sequence, which may itself a sequence,
+                            // sequence, which may itself be a sequence,
                             // and so on).
                             cx.span_err(sp,
                                         &format!("`${0}:{1}` is followed by a \
                                                   sequence repetition, which is not \
                                                   allowed for `{1}` fragments",
-                                                 name.as_str(), frag_spec.as_str())
+                                                 name, frag_spec)
                                         );
                             Eof
                         },
@@ -359,7 +364,7 @@ fn check_matcher<'a, I>(cx: &mut ExtCtxt, matcher: I, follow: &Token)
                     let tok = if let TtToken(_, ref tok) = *token { tok } else { unreachable!() };
 
                     // If T' is in the set FOLLOW(NT), continue. Else, reject.
-                    match (&next_token, is_in_follow(cx, &next_token, frag_spec.as_str())) {
+                    match (&next_token, is_in_follow(cx, &next_token, &frag_spec.name.as_str())) {
                         (_, Err(msg)) => {
                             cx.span_err(sp, &msg);
                             continue
@@ -369,7 +374,7 @@ fn check_matcher<'a, I>(cx: &mut ExtCtxt, matcher: I, follow: &Token)
                         (next, Ok(false)) => {
                             cx.span_err(sp, &format!("`${0}:{1}` is followed by `{2}`, which \
                                                       is not allowed for `{1}` fragments",
-                                                     name.as_str(), frag_spec.as_str(),
+                                                     name, frag_spec,
                                                      token_to_string(next)));
                             continue
                         },
@@ -495,14 +500,14 @@ fn is_in_follow(_: &ExtCtxt, tok: &Token, frag: &str) -> Result<bool, String> {
             "pat" => {
                 match *tok {
                     FatArrow | Comma | Eq => Ok(true),
-                    Ident(i, _) if i.as_str() == "if" || i.as_str() == "in" => Ok(true),
+                    Ident(i, _) if i.name == "if" || i.name == "in" => Ok(true),
                     _ => Ok(false)
                 }
             },
             "path" | "ty" => {
                 match *tok {
                     Comma | FatArrow | Colon | Eq | Gt | Semi => Ok(true),
-                    Ident(i, _) if i.as_str() == "as" => Ok(true),
+                    Ident(i, _) if i.name == "as" => Ok(true),
                     _ => Ok(false)
                 }
             },

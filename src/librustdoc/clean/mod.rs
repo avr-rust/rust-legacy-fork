@@ -745,19 +745,19 @@ impl Lifetime {
 
 impl Clean<Lifetime> for ast::Lifetime {
     fn clean(&self, _: &DocContext) -> Lifetime {
-        Lifetime(token::get_name(self.name).to_string())
+        Lifetime(self.name.to_string())
     }
 }
 
 impl Clean<Lifetime> for ast::LifetimeDef {
     fn clean(&self, _: &DocContext) -> Lifetime {
-        Lifetime(token::get_name(self.lifetime.name).to_string())
+        Lifetime(self.lifetime.name.to_string())
     }
 }
 
 impl Clean<Lifetime> for ty::RegionParameterDef {
     fn clean(&self, _: &DocContext) -> Lifetime {
-        Lifetime(token::get_name(self.name).to_string())
+        Lifetime(self.name.to_string())
     }
 }
 
@@ -766,7 +766,7 @@ impl Clean<Option<Lifetime>> for ty::Region {
         match *self {
             ty::ReStatic => Some(Lifetime::statik()),
             ty::ReLateBound(_, ty::BrNamed(_, name)) =>
-                Some(Lifetime(token::get_name(name).to_string())),
+                Some(Lifetime(name.to_string())),
             ty::ReEarlyBound(ref data) => Some(Lifetime(data.name.clean(cx))),
 
             ty::ReLateBound(..) |
@@ -1611,6 +1611,9 @@ impl Clean<Type> for ast::Ty {
             TyTypeof(..) => {
                 panic!("Unimplemented type {:?}", self.node)
             },
+            TyMac(ref m) => {
+                cx.tcx().sess.span_bug(m.span, "unexpanded type macro found during cleaning")
+            }
         }
     }
 }
@@ -1658,8 +1661,9 @@ impl<'tcx> Clean<Type> for ty::Ty<'tcx> {
                 decl: (ast_util::local_def(0), &fty.sig).clean(cx),
                 abi: fty.abi.to_string(),
             }),
-            ty::TyStruct(did, substs) |
-            ty::TyEnum(did, substs) => {
+            ty::TyStruct(def, substs) |
+            ty::TyEnum(def, substs) => {
+                let did = def.did;
                 let fqn = csearch::get_item_path(cx.tcx(), did);
                 let fqn: Vec<_> = fqn.into_iter().map(|i| i.to_string()).collect();
                 let kind = match self.sty {
@@ -1695,7 +1699,7 @@ impl<'tcx> Clean<Type> for ty::Ty<'tcx> {
 
             ty::TyProjection(ref data) => data.clean(cx),
 
-            ty::TyParam(ref p) => Generic(token::get_name(p.name).to_string()),
+            ty::TyParam(ref p) => Generic(p.name.to_string()),
 
             ty::TyClosure(..) => Tuple(vec![]), // FIXME(pcwalton)
 
@@ -1729,29 +1733,27 @@ impl Clean<Item> for ast::StructField {
     }
 }
 
-impl Clean<Item> for ty::FieldTy {
+impl<'tcx> Clean<Item> for ty::FieldDefData<'tcx, 'static> {
     fn clean(&self, cx: &DocContext) -> Item {
         use syntax::parse::token::special_idents::unnamed_field;
         use rustc::metadata::csearch;
 
-        let attr_map = csearch::get_struct_field_attrs(&cx.tcx().sess.cstore, self.id);
+        let attr_map = csearch::get_struct_field_attrs(&cx.tcx().sess.cstore, self.did);
 
         let (name, attrs) = if self.name == unnamed_field.name {
             (None, None)
         } else {
-            (Some(self.name), Some(attr_map.get(&self.id.node).unwrap()))
+            (Some(self.name), Some(attr_map.get(&self.did.node).unwrap()))
         };
-
-        let ty = cx.tcx().lookup_item_type(self.id);
 
         Item {
             name: name.clean(cx),
             attrs: attrs.unwrap_or(&Vec::new()).clean(cx),
             source: Span::empty(),
             visibility: Some(self.vis),
-            stability: get_stability(cx, self.id),
-            def_id: self.id,
-            inner: StructFieldItem(TypedStructField(ty.ty.clean(cx))),
+            stability: get_stability(cx, self.did),
+            def_id: self.did,
+            inner: StructFieldItem(TypedStructField(self.unsubst_ty().clean(cx))),
         }
     }
 }
@@ -1857,22 +1859,24 @@ impl Clean<Item> for doctree::Variant {
     }
 }
 
-impl<'tcx> Clean<Item> for ty::VariantInfo<'tcx> {
+impl<'tcx> Clean<Item> for ty::VariantDefData<'tcx, 'static> {
     fn clean(&self, cx: &DocContext) -> Item {
         // use syntax::parse::token::special_idents::unnamed_field;
-        let kind = match self.arg_names.as_ref().map(|s| &**s) {
-            None | Some([]) if self.args.is_empty() => CLikeVariant,
-            None | Some([]) => {
-                TupleVariant(self.args.clean(cx))
+        let kind = match self.kind() {
+            ty::VariantKind::Unit => CLikeVariant,
+            ty::VariantKind::Tuple => {
+                TupleVariant(
+                    self.fields.iter().map(|f| f.unsubst_ty().clean(cx)).collect()
+                )
             }
-            Some(s) => {
+            ty::VariantKind::Dict => {
                 StructVariant(VariantStruct {
                     struct_type: doctree::Plain,
                     fields_stripped: false,
-                    fields: s.iter().zip(&self.args).map(|(name, ty)| {
+                    fields: self.fields.iter().map(|field| {
                         Item {
                             source: Span::empty(),
-                            name: Some(name.clean(cx)),
+                            name: Some(field.name.clean(cx)),
                             attrs: Vec::new(),
                             visibility: Some(ast::Public),
                             // FIXME: this is not accurate, we need an id for
@@ -1882,10 +1886,10 @@ impl<'tcx> Clean<Item> for ty::VariantInfo<'tcx> {
                             //        Struct variants are experimental and need
                             //        more infrastructure work before we can get
                             //        at the needed information here.
-                            def_id: self.id,
-                            stability: get_stability(cx, self.id),
+                            def_id: self.did,
+                            stability: get_stability(cx, self.did),
                             inner: StructFieldItem(
-                                TypedStructField(ty.clean(cx))
+                                TypedStructField(field.unsubst_ty().clean(cx))
                             )
                         }
                     }).collect()
@@ -1894,12 +1898,12 @@ impl<'tcx> Clean<Item> for ty::VariantInfo<'tcx> {
         };
         Item {
             name: Some(self.name.clean(cx)),
-            attrs: inline::load_attrs(cx, cx.tcx(), self.id),
+            attrs: inline::load_attrs(cx, cx.tcx(), self.did),
             source: Span::empty(),
             visibility: Some(ast::Public),
-            def_id: self.id,
+            def_id: self.did,
             inner: VariantItem(Variant { kind: kind }),
-            stability: get_stability(cx, self.id),
+            stability: get_stability(cx, self.did),
         }
     }
 }
@@ -1947,6 +1951,10 @@ impl Span {
 
 impl Clean<Span> for syntax::codemap::Span {
     fn clean(&self, cx: &DocContext) -> Span {
+        if *self == DUMMY_SP {
+            return Span::empty();
+        }
+
         let cm = cx.sess().codemap();
         let filename = cm.span_to_filename(*self);
         let lo = cm.lookup_char_pos(self.lo);
@@ -2044,7 +2052,7 @@ impl Clean<PathSegment> for ast::PathSegment {
 fn path_to_string(p: &ast::Path) -> String {
     let mut s = String::new();
     let mut first = true;
-    for i in p.segments.iter().map(|x| token::get_ident(x.identifier)) {
+    for i in p.segments.iter().map(|x| x.identifier.name.as_str()) {
         if !first || p.global {
             s.push_str("::");
         } else {
@@ -2057,13 +2065,13 @@ fn path_to_string(p: &ast::Path) -> String {
 
 impl Clean<String> for ast::Ident {
     fn clean(&self, _: &DocContext) -> String {
-        token::get_ident(*self).to_string()
+        self.to_string()
     }
 }
 
 impl Clean<String> for ast::Name {
     fn clean(&self, _: &DocContext) -> String {
-        token::get_name(*self).to_string()
+        self.to_string()
     }
 }
 
@@ -2528,14 +2536,14 @@ fn name_from_pat(p: &ast::Pat) -> String {
     match p.node {
         PatWild(PatWildSingle) => "_".to_string(),
         PatWild(PatWildMulti) => "..".to_string(),
-        PatIdent(_, ref p, _) => token::get_ident(p.node).to_string(),
+        PatIdent(_, ref p, _) => p.node.to_string(),
         PatEnum(ref p, _) => path_to_string(p),
         PatQPath(..) => panic!("tried to get argument name from PatQPath, \
                                 which is not allowed in function arguments"),
         PatStruct(ref name, ref fields, etc) => {
             format!("{} {{ {}{} }}", path_to_string(name),
                 fields.iter().map(|&Spanned { node: ref fp, .. }|
-                                  format!("{}: {}", fp.ident.as_str(), name_from_pat(&*fp.pat)))
+                                  format!("{}: {}", fp.ident, name_from_pat(&*fp.pat)))
                              .collect::<Vec<String>>().join(", "),
                 if etc { ", ..." } else { "" }
             )
@@ -2599,7 +2607,7 @@ fn resolve_type(cx: &DocContext,
             ast::TyFloat(ast::TyF64) => return Primitive(F64),
         },
         def::DefSelfTy(..) if path.segments.len() == 1 => {
-            return Generic(token::get_name(special_idents::type_self.name).to_string());
+            return Generic(special_idents::type_self.name.to_string());
         }
         def::DefSelfTy(..) | def::DefTyParam(..) => true,
         _ => false,

@@ -98,7 +98,8 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use ascii::*;
 use borrow::{Borrow, IntoCow, ToOwned, Cow};
@@ -134,7 +135,8 @@ use self::platform::{is_sep_byte, is_verbatim_sep, MAIN_SEP_STR, parse_prefix};
 #[cfg(unix)]
 mod platform {
     use super::Prefix;
-    use core::prelude::*;
+    #[cfg(stage0)]
+    use core::prelude::v1::*;
     use ffi::OsStr;
 
     #[inline]
@@ -157,7 +159,8 @@ mod platform {
 
 #[cfg(windows)]
 mod platform {
-    use core::prelude::*;
+    #[cfg(stage0)]
+    use core::prelude::v1::*;
     use ascii::*;
 
     use super::{os_str_as_u8_slice, u8_slice_as_os_str, Prefix};
@@ -200,7 +203,7 @@ mod platform {
                         return Some(VerbatimUNC(server, share));
                     } else {
                         // \\?\path
-                        let idx = path.position_elem(&b'\\');
+                        let idx = path.iter().position(|&b| b == b'\\');
                         if idx == Some(2) && path[1] == b':' {
                             let c = path[0];
                             if c.is_ascii() && (c as char).is_alphabetic() {
@@ -214,7 +217,8 @@ mod platform {
                 } else if path.starts_with(b".\\") {
                     // \\.\path
                     path = &path[2..];
-                    let slice = &path[.. path.position_elem(&b'\\').unwrap_or(path.len())];
+                    let pos = path.iter().position(|&b| b == b'\\');
+                    let slice = &path[..pos.unwrap_or(path.len())];
                     return Some(DeviceNS(u8_slice_as_os_str(slice)));
                 }
                 match parse_two_comps(path, is_sep_byte) {
@@ -1746,7 +1750,8 @@ impl AsRef<Path> for PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::prelude::*;
+    #[cfg(stage0)]
+    use core::prelude::v1::*;
     use string::{ToString, String};
     use vec::Vec;
 

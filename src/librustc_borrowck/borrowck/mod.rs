@@ -39,7 +39,6 @@ use std::rc::Rc;
 use syntax::ast;
 use syntax::ast_util;
 use syntax::codemap::Span;
-use syntax::parse::token;
 use syntax::visit;
 use syntax::visit::{Visitor, FnKind};
 use syntax::ast::{FnDecl, Block, NodeId};
@@ -166,10 +165,13 @@ fn borrowck_fn(this: &mut BorrowckCtxt,
                                                     this.tcx,
                                                     sp,
                                                     id);
+    move_data::fragments::build_unfragmented_map(this,
+                                                 &flowed_moves.move_data,
+                                                 id);
 
     check_loans::check_loans(this,
                              &loan_dfcx,
-                             flowed_moves,
+                             &flowed_moves,
                              &all_loans[..],
                              id,
                              decl,
@@ -1065,7 +1067,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                 match fname {
                     mc::NamedField(fname) => {
                         out.push('.');
-                        out.push_str(&token::get_name(fname));
+                        out.push_str(&fname.as_str());
                     }
                     mc::PositionalField(idx) => {
                         out.push('.');

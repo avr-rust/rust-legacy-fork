@@ -86,7 +86,7 @@ fn owned_ptr_base_path_rc<'tcx>(loan_path: &Rc<LoanPath<'tcx>>) -> Rc<LoanPath<'
 struct CheckLoanCtxt<'a, 'tcx: 'a> {
     bccx: &'a BorrowckCtxt<'a, 'tcx>,
     dfcx_loans: &'a LoanDataFlow<'a, 'tcx>,
-    move_data: move_data::FlowedMoveData<'a, 'tcx>,
+    move_data: &'a move_data::FlowedMoveData<'a, 'tcx>,
     all_loans: &'a [Loan<'tcx>],
     param_env: &'a ty::ParameterEnvironment<'a, 'tcx>,
 }
@@ -191,7 +191,7 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for CheckLoanCtxt<'a, 'tcx> {
 
 pub fn check_loans<'a, 'b, 'c, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
                                      dfcx_loans: &LoanDataFlow<'b, 'tcx>,
-                                     move_data: move_data::FlowedMoveData<'c, 'tcx>,
+                                     move_data: &move_data::FlowedMoveData<'c, 'tcx>,
                                      all_loans: &[Loan<'tcx>],
                                      fn_id: ast::NodeId,
                                      decl: &ast::FnDecl,
@@ -746,24 +746,22 @@ impl<'a, 'tcx> CheckLoanCtxt<'a, 'tcx> {
             }
             LpExtend(ref lp_base, _, LpInterior(InteriorField(_))) => {
                 match lp_base.to_type().sty {
-                    ty::TyStruct(def_id, _) | ty::TyEnum(def_id, _) => {
-                        if self.tcx().has_dtor(def_id) {
-                            // In the case where the owner implements drop, then
-                            // the path must be initialized to prevent a case of
-                            // partial reinitialization
-                            //
-                            // FIXME (22079): could refactor via hypothetical
-                            // generalized check_if_path_is_moved
-                            let loan_path = owned_ptr_base_path_rc(lp_base);
-                            self.move_data.each_move_of(id, &loan_path, |_, _| {
-                                self.bccx
-                                    .report_partial_reinitialization_of_uninitialized_structure(
-                                        span,
-                                        &*loan_path);
-                                false
-                            });
-                            return;
-                        }
+                    ty::TyStruct(def, _) | ty::TyEnum(def, _) if def.has_dtor(self.tcx()) => {
+                        // In the case where the owner implements drop, then
+                        // the path must be initialized to prevent a case of
+                        // partial reinitialization
+                        //
+                        // FIXME (22079): could refactor via hypothetical
+                        // generalized check_if_path_is_moved
+                        let loan_path = owned_ptr_base_path_rc(lp_base);
+                        self.move_data.each_move_of(id, &loan_path, |_, _| {
+                            self.bccx
+                                .report_partial_reinitialization_of_uninitialized_structure(
+                                    span,
+                                    &*loan_path);
+                            false
+                        });
+                        return;
                     },
                     _ => {},
                 }

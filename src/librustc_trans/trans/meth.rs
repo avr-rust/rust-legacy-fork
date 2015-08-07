@@ -39,7 +39,6 @@ use trans::type_of::*;
 use middle::ty::{self, Ty, HasTypeFlags};
 use middle::ty::MethodCall;
 
-use syntax::parse::token;
 use syntax::{ast, attr, visit};
 use syntax::codemap::DUMMY_SP;
 use syntax::ptr::P;
@@ -175,7 +174,7 @@ pub fn trans_static_method_callee<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
         csearch::get_item_path(tcx, method_id).last().unwrap().name()
     };
     debug!("trans_static_method_callee: method_id={:?}, expr_id={}, \
-            name={}", method_id, expr_id, token::get_name(mname));
+            name={}", method_id, expr_id, mname);
 
     // Find the substitutions for the fn itself. This includes
     // type parameters that belong to the trait but also some that
@@ -341,8 +340,6 @@ fn trans_monomorphized_callee<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
             let llfn = closure::trans_closure_method(bcx.ccx(),
                                                      vtable_closure.closure_def_id,
                                                      vtable_closure.substs,
-                                                     MethodCallKey(method_call),
-                                                     bcx.fcx.param_substs,
                                                      trait_closure_kind);
             Callee {
                 bcx: bcx,
@@ -550,9 +547,7 @@ fn trans_object_shim<'a, 'tcx>(
     let shim_fn_ty = tcx.mk_fn(None, fty);
     let method_bare_fn_ty = tcx.mk_fn(None, method_ty);
     let function_name = link::mangle_internal_name_by_type_and_seq(ccx, shim_fn_ty, "object_shim");
-    let llfn = declare::define_internal_rust_fn(ccx, &function_name, shim_fn_ty).unwrap_or_else(||{
-        ccx.sess().bug(&format!("symbol `{}` already defined", function_name));
-    });
+    let llfn = declare::define_internal_rust_fn(ccx, &function_name, shim_fn_ty);
 
     let sig = ccx.tcx().erase_late_bound_regions(&fty.sig);
 
@@ -648,8 +643,6 @@ pub fn get_vtable<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
                 let llfn = closure::trans_closure_method(ccx,
                                                          closure_def_id,
                                                          substs,
-                                                         ExprId(0),
-                                                         param_substs,
                                                          trait_closure_kind);
                 vec![llfn].into_iter()
             }

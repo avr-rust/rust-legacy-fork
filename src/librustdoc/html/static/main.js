@@ -105,6 +105,7 @@
             if (!$("#help").hasClass("hidden")) {
                 ev.preventDefault();
                 $("#help").addClass("hidden");
+                $("body").removeClass("blur");
             } else if (!$("#search").hasClass("hidden")) {
                 ev.preventDefault();
                 $("#search").addClass("hidden");
@@ -115,13 +116,14 @@
         case "s":
         case "S":
             ev.preventDefault();
-            focusSearchBar()
+            focusSearchBar();
             break;
 
         case "?":
             if (ev.shiftKey && $("#help").hasClass("hidden")) {
                 ev.preventDefault();
                 $("#help").removeClass("hidden");
+                $("body").addClass("blur");
             }
             break;
         }
@@ -130,8 +132,9 @@
     $(document).on("keypress", handleShortcut);
     $(document).on("keydown", handleShortcut);
     $(document).on("click", function(ev) {
-        if (!$(ev.target).closest("#help").length) {
+        if (!$(e.target).closest("#help > div").length) {
             $("#help").addClass("hidden");
+            $("body").removeClass("blur");
         }
     });
 
@@ -227,6 +230,28 @@
                 }
             }
 
+            function typePassesFilter(filter, type) {
+                // No filter
+                if (filter < 0) return true;
+
+                // Exact match
+                if (filter === type) return true;
+
+                // Match related items
+                var name = itemTypes[type];
+                switch (itemTypes[filter]) {
+                    case "constant":
+                        return (name == "associatedconstant");
+                    case "fn":
+                        return (name == "method" || name == "tymethod");
+                    case "type":
+                        return (name == "primitive");
+                }
+
+                // No match
+                return false;
+            }
+
             // quoted values mean literal search
             var nSearchWords = searchWords.length;
             if ((val.charAt(0) === "\"" || val.charAt(0) === "'") &&
@@ -236,7 +261,7 @@
                 for (var i = 0; i < nSearchWords; ++i) {
                     if (searchWords[i] === val) {
                         // filter type: ... queries
-                        if (typeFilter < 0 || typeFilter === searchIndex[i].ty) {
+                        if (typePassesFilter(typeFilter, searchIndex[i].ty)) {
                             results.push({id: i, index: -1});
                         }
                     }
@@ -282,7 +307,7 @@
                             searchWords[j].replace(/_/g, "").indexOf(val) > -1)
                         {
                             // filter type: ... queries
-                            if (typeFilter < 0 || typeFilter === searchIndex[j].ty) {
+                            if (typePassesFilter(typeFilter, searchIndex[j].ty)) {
                                 results.push({
                                     id: j,
                                     index: searchWords[j].replace(/_/g, "").indexOf(val),
@@ -292,7 +317,7 @@
                         } else if (
                             (lev_distance = levenshtein(searchWords[j], val)) <=
                                 MAX_LEV_DISTANCE) {
-                            if (typeFilter < 0 || typeFilter === searchIndex[j].ty) {
+                            if (typePassesFilter(typeFilter, searchIndex[j].ty)) {
                                 results.push({
                                     id: j,
                                     index: 0,
@@ -448,11 +473,9 @@
             var matches, type, query, raw = $('.search-input').val();
             query = raw;
 
-            matches = query.match(/^(fn|mod|struct|enum|trait|t(ype)?d(ef)?)\s*:\s*/i);
+            matches = query.match(/^(fn|mod|struct|enum|trait|type|const|macro)\s*:\s*/i);
             if (matches) {
-                type = matches[1].replace(/^td$/, 'typedef')
-                                 .replace(/^tdef$/, 'typedef')
-                                 .replace(/^typed$/, 'typedef');
+                type = matches[1].replace(/^const$/, 'constant');
                 query = query.substring(matches[0].length);
             }
 

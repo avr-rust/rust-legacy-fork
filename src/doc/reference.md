@@ -538,8 +538,9 @@ balanced, but they are otherwise not special.
 In the matcher, `$` _name_ `:` _designator_ matches the nonterminal in the Rust
 syntax named by _designator_. Valid designators are `item`, `block`, `stmt`,
 `pat`, `expr`, `ty` (type), `ident`, `path`, `tt` (either side of the `=>`
-in macro rules). In the transcriber, the designator is already known, and so
-only the name of a matched nonterminal comes after the dollar sign.
+in macro rules), and `meta` (contents of an attribute). In the transcriber, the
+designator is already known, and so only the name of a matched nonterminal comes
+after the dollar sign.
 
 In both the matcher and transcriber, the Kleene star-like operator indicates
 repetition. The Kleene star operator consists of `$` and parentheses, optionally
@@ -591,8 +592,9 @@ always been designed to be compiled. For these reasons, this section assumes a
 compiler.
 
 Rust's semantics obey a *phase distinction* between compile-time and
-run-time.[^phase-distinction] Those semantic rules that have a *static
-interpretation* govern the success or failure of compilation. Those semantics
+run-time.[^phase-distinction] Semantic rules that have a *static
+interpretation* govern the success or failure of compilation, while
+semantic rules
 that have a *dynamic interpretation* govern the behavior of the program at
 run-time.
 
@@ -1198,8 +1200,8 @@ An example of an `enum` item and its use:
 
 ```
 enum Animal {
-  Dog,
-  Cat
+    Dog,
+    Cat,
 }
 
 let mut a: Animal = Animal::Dog;
@@ -1499,7 +1501,29 @@ have an implementation for `Shape`. Multiple supertraits are separated by `+`,
 `trait Circle : Shape + PartialEq { }`. In an implementation of `Circle` for a
 given type `T`, methods can refer to `Shape` methods, since the typechecker
 checks that any type with an implementation of `Circle` also has an
-implementation of `Shape`.
+implementation of `Shape`:
+
+```rust
+struct Foo;
+
+trait Shape { fn area(&self) -> f64; }
+trait Circle : Shape { fn radius(&self) -> f64; }
+# impl Shape for Foo {
+#     fn area(&self) -> f64 {
+#         0.0
+#     }
+# }
+impl Circle for Foo {
+    fn radius(&self) -> f64 {
+        println!("calling area: {}", self.area());
+
+        0.0
+    }
+}
+
+let c = Foo;
+c.radius();
+```
 
 In type-parameterized functions, methods of the supertrait may be called on
 values of subtrait-bound type parameters. Referring to the previous example of
@@ -1635,6 +1659,10 @@ extern { }
 The type of a function declared in an extern block is `extern "abi" fn(A1, ...,
 An) -> R`, where `A1...An` are the declared types of its arguments and `R` is
 the declared return type.
+
+It is valid to add the `link` attribute on an empty extern block. You can use
+this to satisfy the linking requirements of extern blocks elsewhere in your code
+(including upstream crates) instead of adding the attribute to each extern block.
 
 ## Visibility and Privacy
 
@@ -2364,6 +2392,8 @@ The currently implemented features of the reference compiler are:
                               internally without imposing on callers
                               (i.e. making them behave like function calls in
                               terms of encapsulation).
+* - `default_type_parameter_fallback` - Allows type parameter defaults to
+                                        influence type inference.
 
 If a feature is promoted to a language feature, then all existing programs will
 start to receive compilation warnings about `#![feature]` directives which enabled

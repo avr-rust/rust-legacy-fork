@@ -17,7 +17,8 @@
 
 use self::Entry::*;
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use core::cmp::Ordering;
 use core::fmt::Debug;
@@ -530,7 +531,8 @@ enum Continuation<A, B> {
 /// to nodes. By using this module much better safety guarantees can be made, and more search
 /// boilerplate gets cut out.
 mod stack {
-    use core::prelude::*;
+    #[cfg(stage0)]
+    use core::prelude::v1::*;
     use core::marker;
     use core::mem;
     use core::ops::{Deref, DerefMut};
@@ -1504,7 +1506,8 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(btree_range, collections_bound)]
+    /// #![feature(btree_range, collections_bound)]
+    ///
     /// use std::collections::BTreeMap;
     /// use std::collections::Bound::{Included, Unbounded};
     ///
@@ -1519,7 +1522,11 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// ```
     #[unstable(feature = "btree_range",
                reason = "matches collection reform specification, waiting for dust to settle")]
-    pub fn range<'a>(&'a self, min: Bound<&K>, max: Bound<&K>) -> Range<'a, K, V> {
+    pub fn range<Min: ?Sized + Ord = K, Max: ?Sized + Ord = K>(&self, min: Bound<&Min>,
+                                                               max: Bound<&Max>)
+        -> Range<K, V> where
+        K: Borrow<Min> + Borrow<Max>,
+    {
         range_impl!(&self.root, min, max, as_slices_internal, iter, Range, edges, [])
     }
 
@@ -1531,14 +1538,15 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(btree_range, collections_bound)]
+    /// #![feature(btree_range, collections_bound)]
+    ///
     /// use std::collections::BTreeMap;
     /// use std::collections::Bound::{Included, Excluded};
     ///
     /// let mut map: BTreeMap<&str, i32> = ["Alice", "Bob", "Carol", "Cheryl"].iter()
     ///                                                                       .map(|&s| (s, 0))
     ///                                                                       .collect();
-    /// for (_, balance) in map.range_mut(Included(&"B"), Excluded(&"Cheryl")) {
+    /// for (_, balance) in map.range_mut(Included("B"), Excluded("Cheryl")) {
     ///     *balance += 100;
     /// }
     /// for (name, balance) in &map {
@@ -1547,7 +1555,11 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// ```
     #[unstable(feature = "btree_range",
                reason = "matches collection reform specification, waiting for dust to settle")]
-    pub fn range_mut<'a>(&'a mut self, min: Bound<&K>, max: Bound<&K>) -> RangeMut<'a, K, V> {
+    pub fn range_mut<Min: ?Sized + Ord = K, Max: ?Sized + Ord = K>(&mut self, min: Bound<&Min>,
+                                                                   max: Bound<&Max>)
+        -> RangeMut<K, V> where
+        K: Borrow<Min> + Borrow<Max>,
+    {
         range_impl!(&mut self.root, min, max, as_slices_internal_mut, iter_mut, RangeMut,
                                                                       edges_mut, [mut])
     }

@@ -21,7 +21,8 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use alloc::boxed::Box;
 use core::cmp::Ordering;
@@ -784,7 +785,8 @@ impl<'a, A> IterMut<'a, A> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(linked_list_extras)]
+    /// #![feature(linked_list_extras)]
+    ///
     /// use std::collections::LinkedList;
     ///
     /// let mut list: LinkedList<_> = vec![1, 3, 4].into_iter().collect();
@@ -812,7 +814,8 @@ impl<'a, A> IterMut<'a, A> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(linked_list_extras)]
+    /// #![feature(linked_list_extras)]
+    ///
     /// use std::collections::LinkedList;
     ///
     /// let mut list: LinkedList<_> = vec![1, 2, 3].into_iter().collect();

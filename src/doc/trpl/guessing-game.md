@@ -98,8 +98,8 @@ use std::io;
 
 We’ll need to take user input, and then print the result as output. As such, we
 need the `io` library from the standard library. Rust only imports a few things
-into every program, [the ‘prelude’][prelude]. If it’s not in the prelude,
-you’ll have to `use` it directly.
+by default into every program, [the ‘prelude’][prelude]. If it’s not in the
+prelude, you’ll have to `use` it directly.
 
 [prelude]: ../std/prelude/index.html
 
@@ -499,7 +499,7 @@ generator, which is local to the particular [thread][concurrency] of execution
 we’re in. Because we `use rand::Rng`’d above, it has a `gen_range()` method
 available. This method takes two arguments, and generates a number between
 them. It’s inclusive on the lower bound, but exclusive on the upper bound,
-so we need `1` and `101` to get a number between one and a hundred.
+so we need `1` and `101` to get a number ranging from one to a hundred.
 
 [concurrency]: concurrency.html
 
@@ -533,7 +533,7 @@ Great! Next up: let’s compare our guess to the secret guess.
 # Comparing guesses
 
 Now that we’ve got user input, let’s compare our guess to the random guess.
-Here’s our next step, though it doesn’t quite work yet:
+Here’s our next step, though it doesn’t quite compile yet:
 
 ```rust,ignore
 extern crate rand;
@@ -617,7 +617,7 @@ match guess.cmp(&secret_number) {
 If it’s `Less`, we print `Too small!`, if it’s `Greater`, `Too big!`, and if
 `Equal`, `You win!`. `match` is really useful, and is used often in Rust.
 
-I did mention that this won’t quite work yet, though. Let’s try it:
+I did mention that this won’t quite compile yet, though. Let’s try it:
 
 ```bash
 $ cargo build

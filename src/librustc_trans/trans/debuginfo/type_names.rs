@@ -17,7 +17,6 @@ use middle::subst::{self, Substs};
 use middle::ty::{self, Ty};
 
 use syntax::ast;
-use syntax::parse::token;
 
 
 // Compute the name of the type as it should be stored in debuginfo. Does not do
@@ -55,9 +54,9 @@ pub fn push_debuginfo_type_name<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
         ty::TyUint(ast::TyU64)  => output.push_str("u64"),
         ty::TyFloat(ast::TyF32) => output.push_str("f32"),
         ty::TyFloat(ast::TyF64) => output.push_str("f64"),
-        ty::TyStruct(def_id, substs) |
-        ty::TyEnum(def_id, substs) => {
-            push_item_name(cx, def_id, qualified, output);
+        ty::TyStruct(def, substs) |
+        ty::TyEnum(def, substs) => {
+            push_item_name(cx, def.did, qualified, output);
             push_type_params(cx, substs, output);
         },
         ty::TyTuple(ref component_types) => {
@@ -179,8 +178,7 @@ pub fn push_debuginfo_type_name<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
 
                 let mut path_element_count = 0;
                 for path_element in path {
-                    let name = token::get_name(path_element.name());
-                    output.push_str(&name);
+                    output.push_str(&path_element.name().as_str());
                     output.push_str("::");
                     path_element_count += 1;
                 }
@@ -192,10 +190,8 @@ pub fn push_debuginfo_type_name<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
                 output.pop();
                 output.pop();
             } else {
-                let name = token::get_name(path.last()
-                                               .expect("debuginfo: Empty item path?")
-                                               .name());
-                output.push_str(&name);
+                let name = path.last().expect("debuginfo: Empty item path?").name();
+                output.push_str(&name.as_str());
             }
         });
     }

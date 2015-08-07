@@ -9,6 +9,235 @@
 // except according to those terms.
 
 //! Traits, helpers, and type definitions for core I/O functionality.
+//!
+//! The `std::io` module contains a number of common things you'll need
+//! when doing input and output. The most core part of this module is
+//! the [`Read`][read] and [`Write`][write] traits, which provide the
+//! most general interface for reading and writing input and output.
+//!
+//! [read]: trait.Read.html
+//! [write]: trait.Write.html
+//!
+//! # Read and Write
+//!
+//! Because they are traits, they're implemented by a number of other types,
+//! and you can implement them for your types too. As such, you'll see a
+//! few different types of I/O throughout the documentation in this module:
+//! `File`s, `TcpStream`s, and somtimes even `Vec<T>`s. For example, `Read`
+//! adds a `read()` method, which we can use on `File`s:
+//!
+//! ```
+//! use std::io;
+//! use std::io::prelude::*;
+//! use std::fs::File;
+//!
+//! # fn foo() -> io::Result<()> {
+//! let mut f = try!(File::open("foo.txt"));
+//! let mut buffer = [0; 10];
+//!
+//! // read up to 10 bytes
+//! try!(f.read(&mut buffer));
+//!
+//! println!("The bytes: {:?}", buffer);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! `Read` and `Write` are so important, implementors of the two traits have a
+//! nickname: readers and writers. So you'll sometimes see 'a reader' instead
+//! of 'a type that implements the `Read` trait'. Much easier!
+//!
+//! ## Seek and BufRead
+//!
+//! Beyond that, there are two important traits that are provided: [`Seek`][seek]
+//! and [`BufRead`][bufread]. Both of these build on top of a reader to control
+//! how the reading happens. `Seek` lets you control where the next byte is
+//! coming from:
+//!
+//! ```
+//! use std::io;
+//! use std::io::prelude::*;
+//! use std::io::SeekFrom;
+//! use std::fs::File;
+//!
+//! # fn foo() -> io::Result<()> {
+//! let mut f = try!(File::open("foo.txt"));
+//! let mut buffer = [0; 10];
+//!
+//! // skip to the last 10 bytes of the file
+//! try!(f.seek(SeekFrom::End(-10)));
+//!
+//! // read up to 10 bytes
+//! try!(f.read(&mut buffer));
+//!
+//! println!("The bytes: {:?}", buffer);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [seek]: trait.Seek.html
+//! [bufread]: trait.BufRead.html
+//!
+//! `BufRead` uses an internal buffer to provide a number of other ways to read, but
+//! to show it off, we'll need to talk about buffers in general. Keep reading!
+//!
+//! ## BufReader and BufWriter
+//!
+//! Byte-based interfaces are unwieldy and can be inefficient, as we'd need to be
+//! making near-constant calls to the operating system. To help with this,
+//! `std::io` comes with two structs, `BufReader` and `BufWriter`, which wrap
+//! readers and writers. The wrapper uses a buffer, reducing the number of
+//! calls and providing nicer methods for accessing exactly what you want.
+//!
+//! For example, `BufReader` works with the `BufRead` trait to add extra
+//! methods to any reader:
+//!
+//! ```
+//! use std::io;
+//! use std::io::prelude::*;
+//! use std::io::BufReader;
+//! use std::fs::File;
+//!
+//! # fn foo() -> io::Result<()> {
+//! let f = try!(File::open("foo.txt"));
+//! let mut reader = BufReader::new(f);
+//! let mut buffer = String::new();
+//!
+//! // read a line into buffer
+//! try!(reader.read_line(&mut buffer));
+//!
+//! println!("{}", buffer);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! `BufWriter` doesn't add any new ways of writing, it just buffers every call
+//! to [`write()`][write]:
+//!
+//! ```
+//! use std::io;
+//! use std::io::prelude::*;
+//! use std::io::BufWriter;
+//! use std::fs::File;
+//!
+//! # fn foo() -> io::Result<()> {
+//! let f = try!(File::create("foo.txt"));
+//! {
+//!     let mut writer = BufWriter::new(f);
+//!
+//!     // write a byte to the buffer
+//!     try!(writer.write(&[42]));
+//!
+//! } // the buffer is flushed once writer goes out of scope
+//!
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [write]: trait.Write.html#tymethod.write
+//!
+//! ## Standard input and output
+//!
+//! A very common source of input is standard input:
+//!
+//! ```
+//! use std::io;
+//!
+//! # fn foo() -> io::Result<()> {
+//! let mut input = String::new();
+//!
+//! try!(io::stdin().read_line(&mut input));
+//!
+//! println!("You typed: {}", input.trim());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! And a very common source of output is standard output:
+//!
+//! ```
+//! use std::io;
+//! use std::io::prelude::*;
+//!
+//! # fn foo() -> io::Result<()> {
+//! try!(io::stdout().write(&[42]));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Of course, using `io::stdout()` directly is less comon than something like
+//! `println!`.
+//!
+//! ## Iterator types
+//!
+//! A large number of the structures provided by `std::io` are for various
+//! ways of iterating over I/O. For example, `Lines` is used to split over
+//! lines:
+//!
+//! ```
+//! use std::io;
+//! use std::io::prelude::*;
+//! use std::io::BufReader;
+//! use std::fs::File;
+//!
+//! # fn foo() -> io::Result<()> {
+//! let f = try!(File::open("foo.txt"));
+//! let mut reader = BufReader::new(f);
+//!
+//! for line in reader.lines() {
+//!     let line = try!(line);
+//!     println!("{}", line);
+//! }
+//!
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Functions
+//!
+//! There are a number of [functions][functions] that offer access to various
+//! features. For example, we can use three of these functions to copy everything
+//! from standard input to standard output:
+//!
+//! ```
+//! use std::io;
+//!
+//! # fn foo() -> io::Result<()> {
+//! try!(io::copy(&mut io::stdin(), &mut io::stdout()));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [functions]: #functions
+//!
+//! ## io::Result
+//!
+//! Last, but certainly not least, is [`io::Result`][result]. This type is used
+//! as the return type of many `std::io` functions that can cause an error, and
+//! can be returned from your own functions as well. Many of the examples in this
+//! module use the [`try!`][try] macro:
+//!
+//! ```
+//! use std::io;
+//!
+//! fn read_input() -> io::Result<()> {
+//!     let mut input = String::new();
+//!
+//!     try!(io::stdin().read_line(&mut input));
+//!
+//!     println!("You typed: {}", input.trim());
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! The return type of `read_input()`, `io::Result<()>`, is a very common type
+//! for functions which don't have a 'real' return value, but do want to return
+//! errors if they happen. In this case, the only purpose of this function is
+//! to read the line and print it, so we use use `()`.
+//!
+//! [result]: type.Result.html
+//! [try]: macro.try!.html
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
@@ -478,7 +707,7 @@ pub trait Read {
     ///
     /// # fn foo() -> io::Result<()> {
     /// let mut f = try!(File::open("foo.txt"));
-    /// let mut buffer = [0; 10];
+    /// let mut buffer = [0; 5];
     ///
     /// // read at most five bytes
     /// let mut handle = f.take(5);
@@ -831,8 +1060,9 @@ pub trait Seek {
     /// The behavior when seeking past the end of the stream is implementation
     /// defined.
     ///
-    /// This method returns the new position within the stream if the seek
-    /// operation completed successfully.
+    /// If the seek operation completed successfully,
+    /// this method returns the new position from the start of the stream.
+    /// That position can be used later with `SeekFrom::Start`.
     ///
     /// # Errors
     ///
@@ -876,7 +1106,7 @@ fn read_until<R: BufRead + ?Sized>(r: &mut R, delim: u8, buf: &mut Vec<u8>)
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e)
             };
-            match available.position_elem(&delim) {
+            match available.iter().position(|x| *x == delim) {
                 Some(i) => {
                     buf.push_all(&available[..i + 1]);
                     (true, i + 1)
@@ -1167,7 +1397,10 @@ pub trait BufRead: Read {
 
 /// A `Write` adaptor which will write data to multiple locations.
 ///
-/// For more information, see `Write::broadcast`.
+/// This struct is generally created by calling [`broadcast()`][broadcast] on a
+/// writer. Please see the documentation of `broadcast()` for more details.
+///
+/// [broadcast]: trait.Write.html#method.broadcast
 #[unstable(feature = "io", reason = "awaiting stability of Write::broadcast")]
 pub struct Broadcast<T, U> {
     first: T,
@@ -1188,9 +1421,12 @@ impl<T: Write, U: Write> Write for Broadcast<T, U> {
     }
 }
 
-/// Adaptor to chain together two instances of `Read`.
+/// Adaptor to chain together two readers.
 ///
-/// For more information, see `Read::chain`.
+/// This struct is generally created by calling [`chain()`][chain] on a reader.
+/// Please see the documentation of `chain()` for more details.
+///
+/// [chain]: trait.Read.html#method.chain
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Chain<T, U> {
     first: T,
@@ -1213,7 +1449,10 @@ impl<T: Read, U: Read> Read for Chain<T, U> {
 
 /// Reader adaptor which limits the bytes read from an underlying reader.
 ///
-/// For more information, see `Read::take`.
+/// This struct is generally created by calling [`take()`][take] on a reader.
+/// Please see the documentation of `take()` for more details.
+///
+/// [take]: trait.Read.html#method.take
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Take<T> {
     inner: T,
@@ -1266,7 +1505,10 @@ impl<T: BufRead> BufRead for Take<T> {
 
 /// An adaptor which will emit all read data to a specified writer as well.
 ///
-/// For more information see `Read::tee`
+/// This struct is generally created by calling [`tee()`][tee] on a reader.
+/// Please see the documentation of `tee()` for more details.
+///
+/// [tee]: trait.Read.html#method.tee
 #[unstable(feature = "io", reason = "awaiting stability of Read::tee")]
 pub struct Tee<R, W> {
     reader: R,
@@ -1283,9 +1525,12 @@ impl<R: Read, W: Write> Read for Tee<R, W> {
     }
 }
 
-/// A bridge from implementations of `Read` to an `Iterator` of `u8`.
+/// An iterator over `u8` values of a reader.
 ///
-/// See `Read::bytes` for more information.
+/// This struct is generally created by calling [`bytes()`][bytes] on a reader.
+/// Please see the documentation of `bytes()` for more details.
+///
+/// [bytes]: trait.Read.html#method.bytes
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Bytes<R> {
     inner: R,
@@ -1305,9 +1550,12 @@ impl<R: Read> Iterator for Bytes<R> {
     }
 }
 
-/// A bridge from implementations of `Read` to an `Iterator` of `char`.
+/// An iterator over the `char`s of a reader.
 ///
-/// See `Read::chars` for more information.
+/// This struct is generally created by calling [`chars()`][chars] on a reader.
+/// Please see the documentation of `chars()` for more details.
+///
+/// [chars]: trait.Read.html#method.chars
 #[unstable(feature = "io", reason = "awaiting stability of Read::chars")]
 pub struct Chars<R> {
     inner: R,
@@ -1389,7 +1637,10 @@ impl fmt::Display for CharsError {
 /// An iterator over the contents of an instance of `BufRead` split on a
 /// particular byte.
 ///
-/// See `BufRead::split` for more information.
+/// This struct is generally created by calling [`split()`][split] on a
+/// `BufRead`. Please see the documentation of `split()` for more details.
+///
+/// [split]: trait.BufRead.html#method.split
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Split<B> {
     buf: B,
@@ -1415,10 +1666,12 @@ impl<B: BufRead> Iterator for Split<B> {
     }
 }
 
-/// An iterator over the lines of an instance of `BufRead` split on a newline
-/// byte.
+/// An iterator over the lines of an instance of `BufRead`.
 ///
-/// See `BufRead::lines` for more information.
+/// This struct is generally created by calling [`lines()`][lines] on a
+/// `BufRead`. Please see the documentation of `lines()` for more details.
+///
+/// [lines]: trait.BufRead.html#method.lines
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Lines<B> {
     buf: B,

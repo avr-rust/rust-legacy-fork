@@ -188,6 +188,7 @@ pub use self::SubstructureFields::*;
 use self::StructType::*;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::vec;
 
 use abi::Abi;
@@ -549,10 +550,20 @@ impl<'a> TraitDef<'a> {
                 .map(|ty_param| ty_param.ident.name)
                 .collect();
 
+            let mut processed_field_types = HashSet::new();
             for field_ty in field_tys {
                 let tys = find_type_parameters(&*field_ty, &ty_param_names);
 
                 for ty in tys {
+                    // if we have already handled this type, skip it
+                    if let ast::TyPath(_, ref p) = ty.node {
+                        if p.segments.len() == 1
+                            && ty_param_names.contains(&p.segments[0].identifier.name)
+                            || processed_field_types.contains(&p.segments) {
+                            continue;
+                        };
+                        processed_field_types.insert(p.segments.clone());
+                    }
                     let mut bounds: Vec<_> = self.additional_bounds.iter().map(|p| {
                         cx.typarambound(p.to_path(cx, self.span, type_ident, generics))
                     }).collect();
@@ -1241,9 +1252,7 @@ impl<'a> MethodDef<'a> {
 
             let mut first_ident = None;
             for (&ident, self_arg) in vi_idents.iter().zip(&self_args) {
-                let path = vec![cx.ident_of_std("core"),
-                                cx.ident_of("intrinsics"),
-                                cx.ident_of("discriminant_value")];
+                let path = cx.std_path(&["intrinsics", "discriminant_value"]);
                 let call = cx.expr_call_global(
                     sp, path, vec![cx.expr_addr_of(sp, self_arg.clone())]);
                 let variant_value = cx.expr_block(P(ast::Block {
@@ -1278,9 +1287,7 @@ impl<'a> MethodDef<'a> {
             //Since we know that all the arguments will match if we reach the match expression we
             //add the unreachable intrinsics as the result of the catch all which should help llvm
             //in optimizing it
-            let path = vec![cx.ident_of_std("core"),
-                            cx.ident_of("intrinsics"),
-                            cx.ident_of("unreachable")];
+            let path = cx.std_path(&["intrinsics", "unreachable"]);
             let call = cx.expr_call_global(
                 sp, path, vec![]);
             let unreachable = cx.expr_block(P(ast::Block {

@@ -27,7 +27,8 @@
 //! # Examples
 //!
 //! ```rust
-//! # #![feature(mpsc_select)]
+//! #![feature(mpsc_select)]
+//!
 //! use std::sync::mpsc::channel;
 //!
 //! let (tx1, rx1) = channel();
@@ -56,7 +57,8 @@
                       but no guarantees beyond this are being made")]
 
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use core::cell::{Cell, UnsafeCell};
 use core::marker;
@@ -124,7 +126,8 @@ impl Select {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(mpsc_select)]
+    /// #![feature(mpsc_select)]
+    ///
     /// use std::sync::mpsc::Select;
     ///
     /// let select = Select::new();

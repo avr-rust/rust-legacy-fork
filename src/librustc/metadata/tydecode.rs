@@ -468,9 +468,10 @@ fn parse_ty_<'a, 'tcx, F>(st: &mut PState<'a, 'tcx>, conv: &mut F) -> Ty<'tcx> w
       'c' => return tcx.types.char,
       't' => {
         assert_eq!(next(st), '[');
-        let def = parse_def_(st, NominalType, conv);
+        let did = parse_def_(st, NominalType, conv);
         let substs = parse_substs_(st, conv);
         assert_eq!(next(st), ']');
+        let def = st.tcx.lookup_adt_def(did);
         return tcx.mk_enum(def, st.tcx.mk_substs(substs));
       }
       'x' => {
@@ -558,14 +559,20 @@ fn parse_ty_<'a, 'tcx, F>(st: &mut PState<'a, 'tcx>, conv: &mut F) -> Ty<'tcx> w
           let did = parse_def_(st, NominalType, conv);
           let substs = parse_substs_(st, conv);
           assert_eq!(next(st), ']');
-          return st.tcx.mk_struct(did, st.tcx.mk_substs(substs));
+          let def = st.tcx.lookup_adt_def(did);
+          return st.tcx.mk_struct(def, st.tcx.mk_substs(substs));
       }
       'k' => {
           assert_eq!(next(st), '[');
           let did = parse_def_(st, ClosureSource, conv);
           let substs = parse_substs_(st, conv);
+          let mut tys = vec![];
+          while peek(st) != '.' {
+              tys.push(parse_ty_(st, conv));
+          }
+          assert_eq!(next(st), '.');
           assert_eq!(next(st), ']');
-          return st.tcx.mk_closure(did, st.tcx.mk_substs(substs));
+          return st.tcx.mk_closure(did, st.tcx.mk_substs(substs), tys);
       }
       'P' => {
           assert_eq!(next(st), '[');
@@ -828,6 +835,7 @@ fn parse_type_param_def_<'a, 'tcx, F>(st: &mut PState<'a, 'tcx>, conv: &mut F)
     assert_eq!(next(st), '|');
     let index = parse_u32(st);
     assert_eq!(next(st), '|');
+    let default_def_id = parse_def_(st, NominalType, conv);
     let default = parse_opt(st, |st| parse_ty_(st, conv));
     let object_lifetime_default = parse_object_lifetime_default(st, conv);
 
@@ -836,6 +844,7 @@ fn parse_type_param_def_<'a, 'tcx, F>(st: &mut PState<'a, 'tcx>, conv: &mut F)
         def_id: def_id,
         space: space,
         index: index,
+        default_def_id: default_def_id,
         default: default,
         object_lifetime_default: object_lifetime_default,
     }

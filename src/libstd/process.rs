@@ -23,7 +23,7 @@ use path;
 use sync::mpsc::{channel, Receiver};
 use sys::pipe::{self, AnonPipe};
 use sys::process as imp;
-use sys_common::{AsInner, AsInnerMut, FromInner};
+use sys_common::{AsInner, AsInnerMut, FromInner, IntoInner};
 use thread;
 
 /// Representation of a running or exited child process.
@@ -71,6 +71,10 @@ impl AsInner<imp::Process> for Child {
     fn as_inner(&self) -> &imp::Process { &self.handle }
 }
 
+impl IntoInner<imp::Process> for Child {
+    fn into_inner(self) -> imp::Process { self.handle }
+}
+
 /// A handle to a child procesess's stdin
 #[stable(feature = "process", since = "1.0.0")]
 pub struct ChildStdin {
@@ -92,6 +96,10 @@ impl AsInner<AnonPipe> for ChildStdin {
     fn as_inner(&self) -> &AnonPipe { &self.inner }
 }
 
+impl IntoInner<AnonPipe> for ChildStdin {
+    fn into_inner(self) -> AnonPipe { self.inner }
+}
+
 /// A handle to a child procesess's stdout
 #[stable(feature = "process", since = "1.0.0")]
 pub struct ChildStdout {
@@ -109,6 +117,10 @@ impl AsInner<AnonPipe> for ChildStdout {
     fn as_inner(&self) -> &AnonPipe { &self.inner }
 }
 
+impl IntoInner<AnonPipe> for ChildStdout {
+    fn into_inner(self) -> AnonPipe { self.inner }
+}
+
 /// A handle to a child procesess's stderr
 #[stable(feature = "process", since = "1.0.0")]
 pub struct ChildStderr {
@@ -124,6 +136,10 @@ impl Read for ChildStderr {
 
 impl AsInner<AnonPipe> for ChildStderr {
     fn as_inner(&self) -> &AnonPipe { &self.inner }
+}
+
+impl IntoInner<AnonPipe> for ChildStderr {
+    fn into_inner(self) -> AnonPipe { self.inner }
 }
 
 /// The `Command` type acts as a process builder, providing fine-grained control
@@ -489,7 +505,7 @@ impl Child {
     }
 
     /// Returns the OS-assigned process identifier associated with this child.
-    #[unstable(feature = "process_id", reason = "api recently added")]
+    #[stable(feature = "process_id", since = "1.3.0")]
     pub fn id(&self) -> u32 {
         self.handle.id()
     }
@@ -575,7 +591,6 @@ mod tests {
     use io::prelude::*;
 
     use io::ErrorKind;
-    use rt::running_on_valgrind;
     use str;
     use super::{Command, Output, Stdio};
 
@@ -721,10 +736,7 @@ mod tests {
 
         assert!(status.success());
         assert_eq!(output_str.trim().to_string(), "hello");
-        // FIXME #7224
-        if !running_on_valgrind() {
-            assert_eq!(stderr, Vec::new());
-        }
+        assert_eq!(stderr, Vec::new());
     }
 
     #[cfg(not(target_os="android"))]
@@ -763,10 +775,7 @@ mod tests {
 
         assert!(status.success());
         assert_eq!(output_str.trim().to_string(), "hello");
-        // FIXME #7224
-        if !running_on_valgrind() {
-            assert_eq!(stderr, Vec::new());
-        }
+        assert_eq!(stderr, Vec::new());
     }
 
     #[cfg(all(unix, not(target_os="android")))]
@@ -790,8 +799,7 @@ mod tests {
     #[cfg(not(target_os="android"))]
     #[test]
     fn test_inherit_env() {
-        use std::env;
-        if running_on_valgrind() { return; }
+        use env;
 
         let result = env_cmd().output().unwrap();
         let output = String::from_utf8(result.stdout).unwrap();
@@ -807,8 +815,7 @@ mod tests {
     #[cfg(target_os="android")]
     #[test]
     fn test_inherit_env() {
-        use std::env;
-        if running_on_valgrind() { return; }
+        use env;
 
         let mut result = env_cmd().output().unwrap();
         let output = String::from_utf8(result.stdout).unwrap();

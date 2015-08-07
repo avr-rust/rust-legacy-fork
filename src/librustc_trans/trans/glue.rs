@@ -130,17 +130,20 @@ pub fn drop_ty<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                            v: ValueRef,
                            t: Ty<'tcx>,
                            debug_loc: DebugLoc) -> Block<'blk, 'tcx> {
-    drop_ty_core(bcx, v, t, debug_loc, false)
+    drop_ty_core(bcx, v, t, debug_loc, false, None)
 }
 
 pub fn drop_ty_core<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
                                 v: ValueRef,
                                 t: Ty<'tcx>,
                                 debug_loc: DebugLoc,
-                                skip_dtor: bool) -> Block<'blk, 'tcx> {
+                                skip_dtor: bool,
+                                drop_hint: Option<cleanup::DropHintValue>)
+                                -> Block<'blk, 'tcx> {
     // NB: v is an *alias* of type t here, not a direct value.
-    debug!("drop_ty_core(t={:?}, skip_dtor={})", t, skip_dtor);
+    debug!("drop_ty_core(t={:?}, skip_dtor={} drop_hint={:?})", t, skip_dtor, drop_hint);
     let _icx = push_ctxt("drop_ty");
+    let mut bcx = bcx;
     if bcx.fcx.type_needs_drop(t) {
         let ccx = bcx.ccx();
         let g = if skip_dtor {
@@ -156,7 +159,23 @@ pub fn drop_ty_core<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
             v
         };
 
-        Call(bcx, glue, &[ptr], None, debug_loc);
+        match drop_hint {
+            Some(drop_hint) => {
+                let hint_val = load_ty(bcx, drop_hint.value(), bcx.tcx().types.u8);
+                let moved_val =
+                    C_integral(Type::i8(bcx.ccx()), adt::DTOR_MOVED_HINT as u64, false);
+                let may_need_drop =
+                    ICmp(bcx, llvm::IntNE, hint_val, moved_val, DebugLoc::None);
+                bcx = with_cond(bcx, may_need_drop, |cx| {
+                    Call(cx, glue, &[ptr], None, debug_loc);
+                    cx
+                })
+            }
+            None => {
+                // No drop-hint ==> call standard drop glue
+                Call(bcx, glue, &[ptr], None, debug_loc);
+            }
+        }
     }
     bcx
 }
@@ -170,7 +189,7 @@ pub fn drop_ty_immediate<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let _icx = push_ctxt("drop_ty_immediate");
     let vp = alloca(bcx, type_of(bcx.ccx(), t), "");
     store_ty(bcx, v, vp, t);
-    drop_ty_core(bcx, vp, t, debug_loc, skip_dtor)
+    drop_ty_core(bcx, vp, t, debug_loc, skip_dtor, None)
 }
 
 pub fn get_drop_glue<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, t: Ty<'tcx>) -> ValueRef {
@@ -387,38 +406,82 @@ pub fn size_and_align_of_dst<'blk, 'tcx>(bcx: Block<'blk, 'tcx>, t: Ty<'tcx>, in
            t, bcx.val_to_string(info));
     if type_is_sized(bcx.tcx(), t) {
         let sizing_type = sizing_type_of(bcx.ccx(), t);
-        let size = C_uint(bcx.ccx(), llsize_of_alloc(bcx.ccx(), sizing_type));
-        let align = C_uint(bcx.ccx(), align_of(bcx.ccx(), t));
+        let size = llsize_of_alloc(bcx.ccx(), sizing_type);
+        let align = align_of(bcx.ccx(), t);
+        debug!("size_and_align_of_dst t={} info={} size: {} align: {}",
+               t, bcx.val_to_string(info), size, align);
+        let size = C_uint(bcx.ccx(), size);
+        let align = C_uint(bcx.ccx(), align);
         return (size, align);
     }
     match t.sty {
-        ty::TyStruct(id, substs) => {
+        ty::TyStruct(def, substs) => {
             let ccx = bcx.ccx();
             // First get the size of all statically known fields.
             // Don't use type_of::sizing_type_of because that expects t to be sized.
-            assert!(!t.is_simd(bcx.tcx()));
+            assert!(!t.is_simd());
             let repr = adt::represent_type(ccx, t);
-            let sizing_type = adt::sizing_type_of(ccx, &*repr, true);
-            let sized_size = C_uint(ccx, llsize_of_alloc(ccx, sizing_type));
-            let sized_align = C_uint(ccx, llalign_of_min(ccx, sizing_type));
+            let sizing_type = adt::sizing_type_context_of(ccx, &*repr, true);
+            debug!("DST {} sizing_type: {}", t, sizing_type.to_string());
+            let sized_size = llsize_of_alloc(ccx, sizing_type.prefix());
+            let sized_align = llalign_of_min(ccx, sizing_type.prefix());
+            debug!("DST {} statically sized prefix size: {} align: {}",
+                   t, sized_size, sized_align);
+            let sized_size = C_uint(ccx, sized_size);
+            let sized_align = C_uint(ccx, sized_align);
 
             // Recurse to get the size of the dynamically sized field (must be
             // the last field).
-            let fields = bcx.tcx().struct_fields(id, substs);
-            let last_field = fields[fields.len()-1];
-            let field_ty = last_field.mt.ty;
+            let last_field = def.struct_variant().fields.last().unwrap();
+            let field_ty = monomorphize::field_ty(bcx.tcx(), substs, last_field);
             let (unsized_size, unsized_align) = size_and_align_of_dst(bcx, field_ty, info);
 
+            let dbloc = DebugLoc::None;
+
+            // FIXME (#26403, #27023): We should be adding padding
+            // to `sized_size` (to accommodate the `unsized_align`
+            // required of the unsized field that follows) before
+            // summing it with `sized_size`. (Note that since #26403
+            // is unfixed, we do not yet add the necessary padding
+            // here. But this is where the add would go.)
+
             // Return the sum of sizes and max of aligns.
-            let size = Add(bcx, sized_size, unsized_size, DebugLoc::None);
+            let mut size = Add(bcx, sized_size, unsized_size, dbloc);
+
+            // Issue #27023: If there is a drop flag, *now* we add 1
+            // to the size.  (We can do this without adding any
+            // padding because drop flags do not have any alignment
+            // constraints.)
+            if sizing_type.needs_drop_flag() {
+                size = Add(bcx, size, C_uint(bcx.ccx(), 1_u64), dbloc);
+            }
+
+            // Choose max of two known alignments (combined value must
+            // be aligned according to more restrictive of the two).
             let align = Select(bcx,
                                ICmp(bcx,
-                                    llvm::IntULT,
+                                    llvm::IntUGT,
                                     sized_align,
                                     unsized_align,
-                                    DebugLoc::None),
+                                    dbloc),
                                sized_align,
                                unsized_align);
+
+            // Issue #27023: must add any necessary padding to `size`
+            // (to make it a multiple of `align`) before returning it.
+            //
+            // Namely, the returned size should be, in C notation:
+            //
+            //   `size + ((size & (align-1)) ? align : 0)`
+            //
+            // emulated via the semi-standard fast bit trick:
+            //
+            //   `(size + (align-1)) & !align`
+
+            let addend = Sub(bcx, align, C_uint(bcx.ccx(), 1_u64), dbloc);
+            let size = And(
+                bcx, Add(bcx, size, addend, dbloc), Neg(bcx, align, dbloc), dbloc);
+
             (size, align)
         }
         ty::TyTrait(..) => {
@@ -498,27 +561,27 @@ fn make_drop_glue<'blk, 'tcx>(bcx: Block<'blk, 'tcx>, v0: ValueRef, g: DropGlueK
                 })
             }
         }
-        ty::TyStruct(did, substs) | ty::TyEnum(did, substs) => {
+        ty::TyStruct(def, substs) | ty::TyEnum(def, substs) => {
             let tcx = bcx.tcx();
-            match (tcx.ty_dtor(did), skip_dtor) {
+            match (tcx.ty_dtor(def.did), skip_dtor) {
                 (ty::TraitDtor(dtor, true), false) => {
                     // FIXME(16758) Since the struct is unsized, it is hard to
                     // find the drop flag (which is at the end of the struct).
                     // Lets just ignore the flag and pretend everything will be
                     // OK.
                     if type_is_sized(bcx.tcx(), t) {
-                        trans_struct_drop_flag(bcx, t, v0, dtor, did, substs)
+                        trans_struct_drop_flag(bcx, t, v0, dtor, def.did, substs)
                     } else {
                         // Give the user a heads up that we are doing something
                         // stupid and dangerous.
                         bcx.sess().warn(&format!("Ignoring drop flag in destructor for {}\
                                                  because the struct is unsized. See issue\
                                                  #16758", t));
-                        trans_struct_drop(bcx, t, v0, dtor, did, substs)
+                        trans_struct_drop(bcx, t, v0, dtor, def.did, substs)
                     }
                 }
                 (ty::TraitDtor(dtor, false), false) => {
-                    trans_struct_drop(bcx, t, v0, dtor, did, substs)
+                    trans_struct_drop(bcx, t, v0, dtor, def.did, substs)
                 }
                 (ty::NoDtor, _) | (_, true) => {
                     // No dtor? Just the default case

@@ -79,10 +79,11 @@ fn unsize_kind<'a,'tcx>(fcx: &FnCtxt<'a, 'tcx>,
     match t.sty {
         ty::TySlice(_) | ty::TyStr => Some(UnsizeKind::Length),
         ty::TyTrait(ref tty) => Some(UnsizeKind::Vtable(tty.principal_def_id())),
-        ty::TyStruct(did, substs) => {
-            match fcx.tcx().struct_fields(did, substs).pop() {
+        ty::TyStruct(def, substs) => {
+            // FIXME(arielb1): do some kind of normalization
+            match def.struct_variant().fields.last() {
                 None => None,
-                Some(f) => unsize_kind(fcx, f.mt.ty)
+                Some(f) => unsize_kind(fcx, f.ty(fcx.tcx(), substs))
             }
         }
         // We should really try to normalize here.
@@ -122,20 +123,21 @@ impl<'tcx> CastCheck<'tcx> {
             CastError::NeedViaInt |
             CastError::NeedViaUsize => {
                 fcx.type_error_message(self.span, |actual| {
-                    format!("illegal cast; cast through {} first: `{}` as `{}`",
-                            match e {
-                                CastError::NeedViaPtr => "a raw pointer",
-                                CastError::NeedViaInt => "an integer",
-                                CastError::NeedViaUsize => "a usize",
-                                _ => unreachable!()
-                            },
+                    format!("casting `{}` as `{}` is invalid",
                             actual,
                             fcx.infcx().ty_to_string(self.cast_ty))
-                }, self.expr_ty, None)
+                }, self.expr_ty, None);
+                fcx.ccx.tcx.sess.fileline_help(self.span,
+                    &format!("cast through {} first", match e {
+                        CastError::NeedViaPtr => "a raw pointer",
+                        CastError::NeedViaInt => "an integer",
+                        CastError::NeedViaUsize => "a usize",
+                        _ => unreachable!()
+                }));
             }
             CastError::CastToBool => {
-                span_err!(fcx.tcx().sess, self.span, E0054,
-                          "cannot cast as `bool`, compare with zero instead");
+                span_err!(fcx.tcx().sess, self.span, E0054, "cannot cast as `bool`");
+                fcx.ccx.tcx.sess.fileline_help(self.span, "compare with zero instead");
             }
             CastError::CastToChar => {
                 fcx.type_error_message(self.span, |actual| {
@@ -151,17 +153,18 @@ impl<'tcx> CastCheck<'tcx> {
             }
             CastError::IllegalCast => {
                 fcx.type_error_message(self.span, |actual| {
-                    format!("illegal cast: `{}` as `{}`",
+                    format!("casting `{}` as `{}` is invalid",
                             actual,
                             fcx.infcx().ty_to_string(self.cast_ty))
                 }, self.expr_ty, None);
             }
             CastError::DifferingKinds => {
                 fcx.type_error_message(self.span, |actual| {
-                    format!("illegal cast: `{}` as `{}`; vtable kinds may not match",
+                    format!("casting `{}` as `{}` is invalid",
                             actual,
                             fcx.infcx().ty_to_string(self.cast_ty))
                 }, self.expr_ty, None);
+                fcx.ccx.tcx.sess.fileline_note(self.span, "vtable kinds may not match");
             }
         }
     }
@@ -221,8 +224,8 @@ impl<'tcx> CastCheck<'tcx> {
         use middle::cast::IntTy::*;
         use middle::cast::CastTy::*;
 
-        let (t_from, t_cast) = match (CastTy::from_ty(fcx.tcx(), self.expr_ty),
-                                      CastTy::from_ty(fcx.tcx(), self.cast_ty)) {
+        let (t_from, t_cast) = match (CastTy::from_ty(self.expr_ty),
+                                      CastTy::from_ty(self.cast_ty)) {
             (Some(t_from), Some(t_cast)) => (t_from, t_cast),
             _ => {
                 return Err(CastError::NonScalar)
@@ -285,7 +288,7 @@ impl<'tcx> CastCheck<'tcx> {
             return Ok(CastKind::PtrPtrCast);
         }
 
-        // sized -> unsized? report illegal cast (don't complain about vtable kinds)
+        // sized -> unsized? report invalid cast (don't complain about vtable kinds)
         if fcx.type_is_known_to_be_sized(m_expr.ty, self.span) {
             return Err(CastError::IllegalCast);
         }

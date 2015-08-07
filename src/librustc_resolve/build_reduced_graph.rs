@@ -52,7 +52,7 @@ use syntax::ast::Visibility;
 use syntax::ast;
 use syntax::ast_util::local_def;
 use syntax::attr::AttrMetaMethods;
-use syntax::parse::token::{self, special_idents};
+use syntax::parse::token::special_idents;
 use syntax::codemap::{Span, DUMMY_SP};
 use syntax::visit::{self, Visitor};
 
@@ -222,7 +222,7 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                             self.session.span_note(sp,
                                  &format!("first definition of {} `{}` here",
                                       namespace_error_to_string(duplicate_type),
-                                      token::get_name(name)));
+                                      name));
                         }
                     }
                 }
@@ -294,7 +294,7 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
 
                 // Build up the import directives.
                 let shadowable = item.attrs.iter().any(|attr| {
-                    attr.name() == token::get_name(special_idents::prelude_import.name)
+                    attr.name() == special_idents::prelude_import.name.as_str()
                 });
                 let shadowable = if shadowable {
                     Shadowable::Always
@@ -306,12 +306,10 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                     ViewPathSimple(binding, ref full_path) => {
                         let source_name =
                             full_path.segments.last().unwrap().identifier.name;
-                        if &token::get_name(source_name)[..] == "mod" ||
-                           &token::get_name(source_name)[..] == "self" {
+                        if source_name.as_str() == "mod" || source_name.as_str() == "self" {
                             resolve_error(self,
-                                            view_path.span,
-                                            ResolutionError::SelfImportsOnlyAllowedWithin
-                            );
+                                          view_path.span,
+                                          ResolutionError::SelfImportsOnlyAllowedWithin);
                         }
 
                         let subclass = SingleImport(binding.name,
@@ -547,14 +545,12 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
 
                     match trait_item.node {
                         ast::ConstTraitItem(..) => {
-                            let def = DefAssociatedConst(local_def(trait_item.id),
-                                                         FromTrait(local_def(item.id)));
+                            let def = DefAssociatedConst(local_def(trait_item.id));
                             // NB: not DefModifiers::IMPORTABLE
                             name_bindings.define_value(def, trait_item.span, DefModifiers::PUBLIC);
                         }
                         ast::MethodTraitItem(..) => {
-                            let def = DefMethod(local_def(trait_item.id),
-                                                FromTrait(local_def(item.id)));
+                            let def = DefMethod(local_def(trait_item.id));
                             // NB: not DefModifiers::IMPORTABLE
                             name_bindings.define_value(def, trait_item.span, DefModifiers::PUBLIC);
                         }
@@ -763,7 +759,7 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
 
                   debug!("(building reduced graph for external crate) ... \
                           adding trait item '{}'",
-                         token::get_name(trait_item_name));
+                         trait_item_name);
 
                   self.trait_item_map.insert((trait_item_name, def_id),
                                              trait_item_def.def_id());
@@ -795,9 +791,7 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                     crate) building type and value for {}",
                    final_ident);
             child_name_bindings.define_type(def, DUMMY_SP, modifiers);
-            let fields = csearch::get_struct_fields(&self.session.cstore, def_id).iter().map(|f| {
-                f.name
-            }).collect::<Vec<_>>();
+            let fields = csearch::get_struct_field_names(&self.session.cstore, def_id);
 
             if fields.is_empty() {
                 child_name_bindings.define_value(def, DUMMY_SP, modifiers);
@@ -849,7 +843,7 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                         self.handle_external_def(def,
                                                  def_visibility,
                                                  &*child_name_bindings,
-                                                 &token::get_name(name),
+                                                 &name.as_str(),
                                                  name,
                                                  root);
                     }
@@ -883,7 +877,7 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                                     def_id,
                                     |def_like, child_name, visibility| {
             debug!("(populating external module) ... found ident: {}",
-                   token::get_name(child_name));
+                   child_name);
             self.build_reduced_graph_for_external_crate_def(module,
                                                             def_like,
                                                             child_name,
@@ -937,7 +931,7 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
             SingleImport(target, _) => {
                 debug!("(building import directive) building import directive: {}::{}",
                        names_to_string(&module_.imports.borrow().last().unwrap().module_path),
-                       token::get_name(target));
+                       target);
 
                 let mut import_resolutions = module_.import_resolutions.borrow_mut();
                 match import_resolutions.get_mut(&target) {

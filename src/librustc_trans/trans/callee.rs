@@ -32,7 +32,6 @@ use trans::build::*;
 use trans::callee;
 use trans::cleanup;
 use trans::cleanup::CleanupMethods;
-use trans::closure;
 use trans::common::{self, Block, Result, NodeIdAndSpan, ExprId, CrateContext,
                     ExprOrMethodCall, FunctionContext, MethodCallKey};
 use trans::consts;
@@ -160,22 +159,31 @@ fn trans<'blk, 'tcx>(bcx: Block<'blk, 'tcx>, expr: &ast::Expr)
                 let def_id = inline::maybe_instantiate_inline(bcx.ccx(), did);
                 Callee { bcx: bcx, data: Intrinsic(def_id.node, substs), ty: expr_ty }
             }
-            def::DefFn(did, _) | def::DefMethod(did, def::FromImpl(_)) => {
+            def::DefFn(did, _) => {
                 fn_callee(bcx, trans_fn_ref(bcx.ccx(), did, ExprId(ref_expr.id),
                                             bcx.fcx.param_substs))
             }
-            def::DefMethod(meth_did, def::FromTrait(trait_did)) => {
-                fn_callee(bcx, meth::trans_static_method_callee(bcx.ccx(),
-                                                                meth_did,
-                                                                trait_did,
-                                                                ref_expr.id,
-                                                                bcx.fcx.param_substs))
+            def::DefMethod(meth_did) => {
+                let method_item = bcx.tcx().impl_or_trait_item(meth_did);
+                let fn_datum = match method_item.container() {
+                    ty::ImplContainer(_) => {
+                        trans_fn_ref(bcx.ccx(), meth_did,
+                                     ExprId(ref_expr.id),
+                                     bcx.fcx.param_substs)
+                    }
+                    ty::TraitContainer(trait_did) => {
+                        meth::trans_static_method_callee(bcx.ccx(),
+                                                         meth_did,
+                                                         trait_did,
+                                                         ref_expr.id,
+                                                         bcx.fcx.param_substs)
+                    }
+                };
+                fn_callee(bcx, fn_datum)
             }
             def::DefVariant(tid, vid, _) => {
-                let vinfo = bcx.tcx().enum_variant_with_id(tid, vid);
-
-                // Nullary variants are not callable
-                assert!(!vinfo.args.is_empty());
+                let vinfo = bcx.tcx().lookup_adt_def(tid).variant_with_id(vid);
+                assert_eq!(vinfo.kind(), ty::VariantKind::Tuple);
 
                 Callee {
                     bcx: bcx,
@@ -446,12 +454,6 @@ pub fn trans_fn_ref_with_substs<'a, 'tcx>(
         }
     };
 
-    // If this is a closure, redirect to it.
-    match closure::get_or_create_declaration_if_closure(ccx, def_id, substs) {
-        None => {}
-        Some(llfn) => return llfn,
-    }
-
     // Check whether this fn has an inlined copy and, if so, redirect
     // def_id to the local id of the inlined copy.
     let def_id = inline::maybe_instantiate_inline(ccx, def_id);
@@ -620,16 +622,17 @@ pub fn trans_lang_call<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     }, ArgVals(args), dest)
 }
 
-/// This behemoth of a function translates function calls. Unfortunately, in order to generate more
-/// efficient LLVM output at -O0, it has quite a complex signature (refactoring this into two
-/// functions seems like a good idea).
+/// This behemoth of a function translates function calls. Unfortunately, in
+/// order to generate more efficient LLVM output at -O0, it has quite a complex
+/// signature (refactoring this into two functions seems like a good idea).
 ///
-/// In particular, for lang items, it is invoked with a dest of None, and in that case the return
-/// value contains the result of the fn. The lang item must not return a structural type or else
-/// all heck breaks loose.
+/// In particular, for lang items, it is invoked with a dest of None, and in
+/// that case the return value contains the result of the fn. The lang item must
+/// not return a structural type or else all heck breaks loose.
 ///
-/// For non-lang items, `dest` is always Some, and hence the result is written into memory
-/// somewhere. Nonetheless we return the actual return value of the function.
+/// For non-lang items, `dest` is always Some, and hence the result is written
+/// into memory somewhere. Nonetheless we return the actual return value of the
+/// function.
 pub fn trans_call_inner<'a, 'blk, 'tcx, F>(bcx: Block<'blk, 'tcx>,
                                            debug_loc: DebugLoc,
                                            get_callee: F,

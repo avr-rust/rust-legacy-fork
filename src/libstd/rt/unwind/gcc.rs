@@ -8,10 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(private_no_mangle_fns)]
+
 use prelude::v1::*;
 
 use any::Any;
-use libc::c_void;
 use rt::libunwind as uw;
 
 struct Exception {
@@ -41,7 +42,7 @@ pub unsafe fn panic(data: Box<Any + Send + 'static>) -> ! {
     }
 }
 
-pub unsafe fn cleanup(ptr: *mut c_void) -> Box<Any + Send + 'static> {
+pub unsafe fn cleanup(ptr: *mut u8) -> Box<Any + Send + 'static> {
     let my_ep = ptr as *mut Exception;
     rtdebug!("caught {}", (*my_ep).uwe.exception_class);
     let cause = (*my_ep).cause.take();
@@ -73,14 +74,7 @@ fn rust_exception_class() -> uw::_Unwind_Exception_Class {
 //   so the behavior of __gcc_personality_v0 is perfectly adequate there, and
 // - rust_eh_personality_catch, used only by rust_try(), which always catches.
 //
-// Note, however, that for implementation simplicity, rust_eh_personality_catch
-// lacks code to install a landing pad, so in order to obtain exception object
-// pointer (which it needs to return upstream), rust_try() employs another trick:
-// it calls into the nested rust_try_inner(), whose landing pad does not resume
-// unwinds.  Instead, it extracts the exception pointer and performs a "normal"
-// return.
-//
-// See also: rt/rust_try.ll
+// See also: rustc_trans::trans::intrinsic::trans_gnu_try
 
 #[cfg(all(not(target_arch = "arm"),
           not(all(windows, target_arch = "x86_64")),
@@ -89,7 +83,7 @@ pub mod eabi {
     use rt::libunwind as uw;
     use libc::c_int;
 
-    extern "C" {
+    extern {
         fn __gcc_personality_v0(version: c_int,
                                 actions: uw::_Unwind_Action,
                                 exception_class: uw::_Unwind_Exception_Class,
@@ -98,9 +92,8 @@ pub mod eabi {
             -> uw::_Unwind_Reason_Code;
     }
 
-    #[lang="eh_personality"]
-    #[no_mangle] // referenced from rust_try.ll
-    #[allow(private_no_mangle_fns)]
+    #[lang = "eh_personality"]
+    #[no_mangle]
     extern fn rust_eh_personality(
         version: c_int,
         actions: uw::_Unwind_Action,
@@ -115,13 +108,14 @@ pub mod eabi {
         }
     }
 
-    #[no_mangle] // referenced from rust_try.ll
-    pub extern "C" fn rust_eh_personality_catch(
-        _version: c_int,
+    #[lang = "eh_personality_catch"]
+    #[no_mangle]
+    pub extern fn rust_eh_personality_catch(
+        version: c_int,
         actions: uw::_Unwind_Action,
-        _exception_class: uw::_Unwind_Exception_Class,
-        _ue_header: *mut uw::_Unwind_Exception,
-        _context: *mut uw::_Unwind_Context
+        exception_class: uw::_Unwind_Exception_Class,
+        ue_header: *mut uw::_Unwind_Exception,
+        context: *mut uw::_Unwind_Context
     ) -> uw::_Unwind_Reason_Code
     {
 
@@ -129,7 +123,10 @@ pub mod eabi {
             uw::_URC_HANDLER_FOUND // catch!
         }
         else { // cleanup phase
-            uw::_URC_INSTALL_CONTEXT
+            unsafe {
+                __gcc_personality_v0(version, actions, exception_class, ue_header,
+                                     context)
+            }
         }
     }
 }
@@ -142,7 +139,7 @@ pub mod eabi {
     use rt::libunwind as uw;
     use libc::c_int;
 
-    extern "C" {
+    extern {
         fn __gcc_personality_sj0(version: c_int,
                                 actions: uw::_Unwind_Action,
                                 exception_class: uw::_Unwind_Exception_Class,
@@ -151,9 +148,9 @@ pub mod eabi {
             -> uw::_Unwind_Reason_Code;
     }
 
-    #[lang="eh_personality"]
-    #[no_mangle] // referenced from rust_try.ll
-    pub extern "C" fn rust_eh_personality(
+    #[lang = "eh_personality"]
+    #[no_mangle]
+    pub extern fn rust_eh_personality(
         version: c_int,
         actions: uw::_Unwind_Action,
         exception_class: uw::_Unwind_Exception_Class,
@@ -167,13 +164,14 @@ pub mod eabi {
         }
     }
 
-    #[no_mangle] // referenced from rust_try.ll
-    pub extern "C" fn rust_eh_personality_catch(
-        _version: c_int,
+    #[lang = "eh_personality_catch"]
+    #[no_mangle]
+    pub extern fn rust_eh_personality_catch(
+        version: c_int,
         actions: uw::_Unwind_Action,
-        _exception_class: uw::_Unwind_Exception_Class,
-        _ue_header: *mut uw::_Unwind_Exception,
-        _context: *mut uw::_Unwind_Context
+        exception_class: uw::_Unwind_Exception_Class,
+        ue_header: *mut uw::_Unwind_Exception,
+        context: *mut uw::_Unwind_Context
     ) -> uw::_Unwind_Reason_Code
     {
         if (actions as c_int & uw::_UA_SEARCH_PHASE as c_int) != 0 { // search phase
@@ -181,8 +179,8 @@ pub mod eabi {
         }
         else { // cleanup phase
             unsafe {
-                __gcc_personality_sj0(_version, actions, _exception_class, _ue_header,
-                                      _context)
+                __gcc_personality_sj0(version, actions, exception_class, ue_header,
+                                      context)
             }
         }
     }
@@ -196,17 +194,16 @@ pub mod eabi {
     use rt::libunwind as uw;
     use libc::c_int;
 
-    extern "C" {
+    extern {
         fn __gcc_personality_v0(state: uw::_Unwind_State,
                                 ue_header: *mut uw::_Unwind_Exception,
                                 context: *mut uw::_Unwind_Context)
             -> uw::_Unwind_Reason_Code;
     }
 
-    #[lang="eh_personality"]
-    #[no_mangle] // referenced from rust_try.ll
-    #[allow(private_no_mangle_fns)]
-    extern "C" fn rust_eh_personality(
+    #[lang = "eh_personality"]
+    #[no_mangle]
+    extern fn rust_eh_personality(
         state: uw::_Unwind_State,
         ue_header: *mut uw::_Unwind_Exception,
         context: *mut uw::_Unwind_Context
@@ -217,11 +214,12 @@ pub mod eabi {
         }
     }
 
-    #[no_mangle] // referenced from rust_try.ll
-    pub extern "C" fn rust_eh_personality_catch(
+    #[lang = "eh_personality_catch"]
+    #[no_mangle]
+    pub extern fn rust_eh_personality_catch(
         state: uw::_Unwind_State,
-        _ue_header: *mut uw::_Unwind_Exception,
-        _context: *mut uw::_Unwind_Context
+        ue_header: *mut uw::_Unwind_Exception,
+        context: *mut uw::_Unwind_Context
     ) -> uw::_Unwind_Reason_Code
     {
         if (state as c_int & uw::_US_ACTION_MASK as c_int)
@@ -229,113 +227,9 @@ pub mod eabi {
             uw::_URC_HANDLER_FOUND // catch!
         }
         else { // cleanup phase
-            uw::_URC_INSTALL_CONTEXT
+            unsafe {
+                __gcc_personality_v0(state, ue_header, context)
+            }
         }
     }
 }
-
-// Win64 SEH (see http://msdn.microsoft.com/en-us/library/1eyas8tf.aspx)
-//
-// This looks a bit convoluted because rather than implementing a native SEH
-// handler, GCC reuses the same personality routine as for the other
-// architectures by wrapping it with an "API translator" layer
-// (_GCC_specific_handler).
-
-#[cfg(all(windows, target_arch = "x86_64", not(test)))]
-#[doc(hidden)]
-#[allow(non_camel_case_types, non_snake_case)]
-pub mod eabi {
-    pub use self::EXCEPTION_DISPOSITION::*;
-    use rt::libunwind as uw;
-    use libc::{c_void, c_int};
-
-    #[repr(C)]
-    pub struct EXCEPTION_RECORD;
-    #[repr(C)]
-    pub struct CONTEXT;
-    #[repr(C)]
-    pub struct DISPATCHER_CONTEXT;
-
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    pub enum EXCEPTION_DISPOSITION {
-        ExceptionContinueExecution,
-        ExceptionContinueSearch,
-        ExceptionNestedException,
-        ExceptionCollidedUnwind
-    }
-
-    type _Unwind_Personality_Fn =
-        extern "C" fn(
-            version: c_int,
-            actions: uw::_Unwind_Action,
-            exception_class: uw::_Unwind_Exception_Class,
-            ue_header: *mut uw::_Unwind_Exception,
-            context: *mut uw::_Unwind_Context
-        ) -> uw::_Unwind_Reason_Code;
-
-    extern "C" {
-        fn __gcc_personality_seh0(
-            exceptionRecord: *mut EXCEPTION_RECORD,
-            establisherFrame: *mut c_void,
-            contextRecord: *mut CONTEXT,
-            dispatcherContext: *mut DISPATCHER_CONTEXT
-        ) -> EXCEPTION_DISPOSITION;
-
-        fn _GCC_specific_handler(
-            exceptionRecord: *mut EXCEPTION_RECORD,
-            establisherFrame: *mut c_void,
-            contextRecord: *mut CONTEXT,
-            dispatcherContext: *mut DISPATCHER_CONTEXT,
-            personality: _Unwind_Personality_Fn
-        ) -> EXCEPTION_DISPOSITION;
-    }
-
-    #[lang="eh_personality"]
-    #[no_mangle] // referenced from rust_try.ll
-    #[allow(private_no_mangle_fns)]
-    extern "C" fn rust_eh_personality(
-        exceptionRecord: *mut EXCEPTION_RECORD,
-        establisherFrame: *mut c_void,
-        contextRecord: *mut CONTEXT,
-        dispatcherContext: *mut DISPATCHER_CONTEXT
-    ) -> EXCEPTION_DISPOSITION
-    {
-        unsafe {
-            __gcc_personality_seh0(exceptionRecord, establisherFrame,
-                                   contextRecord, dispatcherContext)
-        }
-    }
-
-    #[no_mangle] // referenced from rust_try.ll
-    pub extern "C" fn rust_eh_personality_catch(
-        exceptionRecord: *mut EXCEPTION_RECORD,
-        establisherFrame: *mut c_void,
-        contextRecord: *mut CONTEXT,
-        dispatcherContext: *mut DISPATCHER_CONTEXT
-    ) -> EXCEPTION_DISPOSITION
-    {
-        extern "C" fn inner(
-                _version: c_int,
-                actions: uw::_Unwind_Action,
-                _exception_class: uw::_Unwind_Exception_Class,
-                _ue_header: *mut uw::_Unwind_Exception,
-                _context: *mut uw::_Unwind_Context
-            ) -> uw::_Unwind_Reason_Code
-        {
-            if (actions as c_int & uw::_UA_SEARCH_PHASE as c_int) != 0 { // search phase
-                uw::_URC_HANDLER_FOUND // catch!
-            }
-            else { // cleanup phase
-                uw::_URC_INSTALL_CONTEXT
-            }
-        }
-
-        unsafe {
-            _GCC_specific_handler(exceptionRecord, establisherFrame,
-                                  contextRecord, dispatcherContext,
-                                  inner)
-        }
-    }
-}
-

@@ -14,7 +14,8 @@
 #![crate_type = "rlib"]
 #![cfg_attr(not(feature = "cargo-build"), unstable(feature = "libc",
                                                    reason = "use `libc` from crates.io"))]
-#![cfg_attr(not(feature = "cargo-build"), feature(staged_api, core, no_std))]
+#![cfg_attr(not(feature = "cargo-build"), feature(staged_api, no_std))]
+#![cfg_attr(all(not(feature = "cargo-build"), stage0), feature(core))]
 #![cfg_attr(not(feature = "cargo-build"), staged_api)]
 #![cfg_attr(not(feature = "cargo-build"), no_std)]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
@@ -78,7 +79,7 @@
 #![allow(bad_style, raw_pointer_derive)]
 #![cfg_attr(target_os = "nacl", allow(unused_imports))]
 #[cfg(feature = "cargo-build")] extern crate std as core;
-#[cfg(not(feature = "cargo-build"))] extern crate core;
+#[cfg(all(stage0, not(feature = "cargo-build")))] extern crate core;
 
 #[cfg(test)] extern crate std;
 #[cfg(test)] extern crate test;
@@ -1002,14 +1003,14 @@ pub mod types {
             }
             pub mod posix01 {
                 use types::common::c95::{c_void};
-                use types::common::c99::{uint8_t, uint32_t, int32_t};
+                use types::common::c99::{uint32_t, int32_t};
                 use types::os::arch::c95::{c_long, time_t};
                 use types::os::arch::posix88::{dev_t, gid_t, ino_t};
                 use types::os::arch::posix88::{mode_t, off_t};
                 use types::os::arch::posix88::{uid_t};
 
                 pub type nlink_t = u16;
-                pub type blksize_t = i32;
+                pub type blksize_t = u32;
                 pub type blkcnt_t = i64;
                 pub type fflags_t = u32;
                 #[repr(C)]
@@ -1035,7 +1036,7 @@ pub mod types {
                     pub st_lspare: int32_t,
                     pub st_birthtime: time_t,
                     pub st_birthtime_nsec: c_long,
-                    pub __unused: [uint8_t; 2],
+                    pub __unused: [u8; 8],
                 }
 
                 #[repr(C)]
@@ -1096,14 +1097,14 @@ pub mod types {
             }
             pub mod posix01 {
                 use types::common::c95::{c_void};
-                use types::common::c99::{uint8_t, uint32_t, int32_t};
+                use types::common::c99::{uint32_t, int32_t};
                 use types::os::arch::c95::{c_long, time_t};
                 use types::os::arch::posix88::{dev_t, gid_t, ino_t};
                 use types::os::arch::posix88::{mode_t, off_t};
                 use types::os::arch::posix88::{uid_t};
 
                 pub type nlink_t = u16;
-                pub type blksize_t = i64;
+                pub type blksize_t = u32;
                 pub type blkcnt_t = i64;
                 pub type fflags_t = u32;
                 #[repr(C)]
@@ -1129,7 +1130,6 @@ pub mod types {
                     pub st_lspare: int32_t,
                     pub st_birthtime: time_t,
                     pub st_birthtime_nsec: c_long,
-                    pub __unused: [uint8_t; 2],
                 }
 
                 #[repr(C)]
@@ -6534,9 +6534,5 @@ pub mod funcs {
         }
     }
 }
-
-#[doc(hidden)]
-#[cfg(stage0)]
-pub fn issue_14344_workaround() {} // FIXME #14344 force linkage to happen correctly
 
 #[test] fn work_on_windows() { } // FIXME #10872 needed for a happy windows

@@ -16,7 +16,8 @@
 //! # Examples
 //!
 //! ```rust
-//! # #![feature(hash_default)]
+//! #![feature(hash_default)]
+//!
 //! use std::hash::{hash, Hash, SipHasher};
 //!
 //! #[derive(Hash)]
@@ -36,7 +37,8 @@
 //! the trait `Hash`:
 //!
 //! ```rust
-//! # #![feature(hash_default)]
+//! #![feature(hash_default)]
+//!
 //! use std::hash::{hash, Hash, Hasher, SipHasher};
 //!
 //! struct Person {
@@ -60,7 +62,7 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use prelude::*;
+use prelude::v1::*;
 
 use mem;
 
@@ -89,8 +91,7 @@ pub trait Hash {
     fn hash<H: Hasher>(&self, state: &mut H);
 
     /// Feeds a slice of this type into the state provided.
-    #[unstable(feature = "hash_slice",
-               reason = "module was recently redesigned")]
+    #[stable(feature = "hash_slice", since = "1.3.0")]
     fn hash_slice<H: Hasher>(data: &[Self], state: &mut H) where Self: Sized {
         for piece in data {
             piece.hash(state);
@@ -111,29 +112,29 @@ pub trait Hasher {
 
     /// Write a single `u8` into this hasher
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_u8(&mut self, i: u8) { self.write(&[i]) }
     /// Write a single `u16` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_u16(&mut self, i: u16) {
         self.write(&unsafe { mem::transmute::<_, [u8; 2]>(i) })
     }
     /// Write a single `u32` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_u32(&mut self, i: u32) {
         self.write(&unsafe { mem::transmute::<_, [u8; 4]>(i) })
     }
     /// Write a single `u64` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_u64(&mut self, i: u64) {
         self.write(&unsafe { mem::transmute::<_, [u8; 8]>(i) })
     }
     /// Write a single `usize` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_usize(&mut self, i: usize) {
         if cfg!(target_pointer_width = "32") {
             self.write_u32(i as u32)
@@ -144,23 +145,23 @@ pub trait Hasher {
 
     /// Write a single `i8` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_i8(&mut self, i: i8) { self.write_u8(i as u8) }
     /// Write a single `i16` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_i16(&mut self, i: i16) { self.write_u16(i as u16) }
     /// Write a single `i32` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_i32(&mut self, i: i32) { self.write_u32(i as u32) }
     /// Write a single `i64` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_i64(&mut self, i: i64) { self.write_u64(i as u64) }
     /// Write a single `isize` into this hasher.
     #[inline]
-    #[unstable(feature = "hasher_write", reason = "module was recently redesigned")]
+    #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_isize(&mut self, i: isize) { self.write_usize(i as usize) }
 }
 
@@ -171,6 +172,8 @@ pub trait Hasher {
 #[unstable(feature = "hash_default",
            reason = "not the most ergonomic interface unless `H` is defaulted \
                      to SipHasher, but perhaps not ready to commit to that")]
+#[deprecated(since = "1.3.0",
+             reason = "has yet to prove itself useful")]
 pub fn hash<T: Hash, H: Hasher + Default>(value: &T) -> u64 {
     let mut h: H = Default::default();
     value.hash(&mut h);
@@ -180,7 +183,7 @@ pub fn hash<T: Hash, H: Hasher + Default>(value: &T) -> u64 {
 //////////////////////////////////////////////////////////////////////////////
 
 mod impls {
-    use prelude::*;
+    use prelude::v1::*;
 
     use slice;
     use super::*;

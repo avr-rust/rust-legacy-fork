@@ -8,7 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use middle::const_eval;
 use middle::def;
 use middle::infer;
 use middle::pat_util::{PatIdMap, pat_id_map, pat_is_binding};
@@ -23,12 +22,11 @@ use check::{instantiate_path, resolve_ty_and_def_ufcs, structurally_resolved_typ
 use require_same_types;
 use util::nodemap::FnvHashMap;
 
-use std::cmp::{self, Ordering};
+use std::cmp;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use syntax::ast;
 use syntax::ast_util;
 use syntax::codemap::{Span, Spanned};
-use syntax::parse::token;
 use syntax::print::pprust;
 use syntax::ptr::P;
 
@@ -129,18 +127,6 @@ pub fn check_pat<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
             let common_type = fcx.infcx().resolve_type_vars_if_possible(&lhs_ty);
 
             fcx.write_ty(pat.id, common_type);
-
-            // Finally we evaluate the constants and check that the range is non-empty.
-            let get_substs = |id| fcx.item_substs()[&id].substs.clone();
-            match const_eval::compare_lit_exprs(tcx, begin, end, Some(&common_type), get_substs) {
-                Some(Ordering::Less) |
-                Some(Ordering::Equal) => {}
-                Some(Ordering::Greater) => {
-                    span_err!(tcx.sess, begin.span, E0030,
-                        "lower range bound must be less than or equal to upper");
-                }
-                None => tcx.sess.span_bug(begin.span, "literals of different types in range pat")
-            }
 
             // subtyping doesn't matter here, as the value is some kind of scalar
             demand::eqtype(fcx, pat.span, expected, lhs_ty);
@@ -542,7 +528,7 @@ pub fn check_pat_struct<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>, pat: &'tcx ast::Pat,
     let tcx = pcx.fcx.ccx.tcx;
 
     let def = tcx.def_map.borrow().get(&pat.id).unwrap().full_def();
-    let (enum_def_id, variant_def_id) = match def {
+    let (adt_def, variant) = match def {
         def::DefTrait(_) => {
             let name = pprust::path_to_string(path);
             span_err!(tcx.sess, pat.span, E0168,
@@ -557,11 +543,11 @@ pub fn check_pat_struct<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>, pat: &'tcx ast::Pat,
         _ => {
             let def_type = tcx.lookup_item_type(def.def_id());
             match def_type.ty.sty {
-                ty::TyStruct(struct_def_id, _) =>
-                    (struct_def_id, struct_def_id),
-                ty::TyEnum(enum_def_id, _)
-                    if def == def::DefVariant(enum_def_id, def.def_id(), true) =>
-                    (enum_def_id, def.def_id()),
+                ty::TyStruct(struct_def, _) =>
+                    (struct_def, struct_def.struct_variant()),
+                ty::TyEnum(enum_def, _)
+                    if def == def::DefVariant(enum_def.did, def.def_id(), true) =>
+                    (enum_def, enum_def.variant_of_def(def)),
                 _ => {
                     let name = pprust::path_to_string(path);
                     span_err!(tcx.sess, pat.span, E0163,
@@ -579,8 +565,8 @@ pub fn check_pat_struct<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>, pat: &'tcx ast::Pat,
 
     instantiate_path(pcx.fcx,
                      &path.segments,
-                     tcx.lookup_item_type(enum_def_id),
-                     &tcx.lookup_predicates(enum_def_id),
+                     adt_def.type_scheme(tcx),
+                     &adt_def.predicates(tcx),
                      None,
                      def,
                      pat.span,
@@ -595,9 +581,7 @@ pub fn check_pat_struct<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>, pat: &'tcx ast::Pat,
         .map(|substs| substs.substs.clone())
         .unwrap_or_else(|| Substs::empty());
 
-    let struct_fields = tcx.struct_fields(variant_def_id, &item_substs);
-    check_struct_pat_fields(pcx, pat.span, fields, &struct_fields,
-                            variant_def_id, etc);
+    check_struct_pat_fields(pcx, pat.span, fields, variant, &item_substs, etc);
 }
 
 pub fn check_pat_enum<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
@@ -661,22 +645,26 @@ pub fn check_pat_enum<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
 
     let real_path_ty = fcx.node_ty(pat.id);
     let (arg_tys, kind_name): (Vec<_>, &'static str) = match real_path_ty.sty {
-        ty::TyEnum(enum_def_id, expected_substs)
-            if def == def::DefVariant(enum_def_id, def.def_id(), false) =>
+        ty::TyEnum(enum_def, expected_substs)
+            if def == def::DefVariant(enum_def.did, def.def_id(), false) =>
         {
-            let variant = tcx.enum_variant_with_id(enum_def_id, def.def_id());
-            (variant.args.iter()
-                         .map(|t| fcx.instantiate_type_scheme(pat.span, expected_substs, t))
-                         .collect(),
+            let variant = enum_def.variant_of_def(def);
+            (variant.fields
+                    .iter()
+                    .map(|f| fcx.instantiate_type_scheme(pat.span,
+                                                         expected_substs,
+                                                         &f.unsubst_ty()))
+                    .collect(),
              "variant")
         }
-        ty::TyStruct(struct_def_id, expected_substs) => {
-            let struct_fields = tcx.struct_fields(struct_def_id, expected_substs);
-            (struct_fields.iter()
-                          .map(|field| fcx.instantiate_type_scheme(pat.span,
-                                                                   expected_substs,
-                                                                   &field.mt.ty))
-                          .collect(),
+        ty::TyStruct(struct_def, expected_substs) => {
+            (struct_def.struct_variant()
+                       .fields
+                       .iter()
+                       .map(|f| fcx.instantiate_type_scheme(pat.span,
+                                                            expected_substs,
+                                                            &f.unsubst_ty()))
+                       .collect(),
              "struct")
         }
         _ => {
@@ -729,15 +717,15 @@ pub fn check_pat_enum<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
 pub fn check_struct_pat_fields<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
                                          span: Span,
                                          fields: &'tcx [Spanned<ast::FieldPat>],
-                                         struct_fields: &[ty::Field<'tcx>],
-                                         struct_id: ast::DefId,
+                                         variant: ty::VariantDef<'tcx>,
+                                         substs: &Substs<'tcx>,
                                          etc: bool) {
     let tcx = pcx.fcx.ccx.tcx;
 
     // Index the struct fields' types.
-    let field_type_map = struct_fields
+    let field_map = variant.fields
         .iter()
-        .map(|field| (field.name, field.mt.ty))
+        .map(|field| (field.name, field))
         .collect::<FnvHashMap<_, _>>();
 
     // Keep track of which fields have already appeared in the pattern.
@@ -745,42 +733,41 @@ pub fn check_struct_pat_fields<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
 
     // Typecheck each field.
     for &Spanned { node: ref field, span } in fields {
-        let field_type = match used_fields.entry(field.ident.name) {
+        let field_ty = match used_fields.entry(field.ident.name) {
             Occupied(occupied) => {
                 span_err!(tcx.sess, span, E0025,
                     "field `{}` bound multiple times in the pattern",
-                    token::get_ident(field.ident));
+                    field.ident);
                 span_note!(tcx.sess, *occupied.get(),
                     "field `{}` previously bound here",
-                    token::get_ident(field.ident));
+                    field.ident);
                 tcx.types.err
             }
             Vacant(vacant) => {
                 vacant.insert(span);
-                field_type_map.get(&field.ident.name).cloned()
+                field_map.get(&field.ident.name)
+                    .map(|f| pcx.fcx.field_ty(span, f, substs))
                     .unwrap_or_else(|| {
                         span_err!(tcx.sess, span, E0026,
                             "struct `{}` does not have a field named `{}`",
-                            tcx.item_path_str(struct_id),
-                            token::get_ident(field.ident));
+                            tcx.item_path_str(variant.did),
+                            field.ident);
                         tcx.types.err
                     })
             }
         };
 
-        let field_type = pcx.fcx.normalize_associated_types_in(span, &field_type);
-
-        check_pat(pcx, &*field.pat, field_type);
+        check_pat(pcx, &*field.pat, field_ty);
     }
 
     // Report an error if not all the fields were specified.
     if !etc {
-        for field in struct_fields
+        for field in variant.fields
             .iter()
             .filter(|field| !used_fields.contains_key(&field.name)) {
             span_err!(tcx.sess, span, E0027,
                 "pattern does not mention field `{}`",
-                token::get_name(field.name));
+                field.name);
         }
     }
 }

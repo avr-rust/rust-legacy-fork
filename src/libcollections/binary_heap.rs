@@ -151,7 +151,8 @@
 #![allow(missing_docs)]
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use core::iter::{FromIterator};
 use core::mem::swap;
@@ -216,7 +217,8 @@ impl<T: Ord> BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     /// let heap = BinaryHeap::from_vec(vec![9, 1, 2, 7, 3, 2]);
     /// ```
@@ -236,7 +238,8 @@ impl<T: Ord> BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     /// let heap = BinaryHeap::from_vec(vec![1, 2, 3, 4]);
     ///
@@ -341,7 +344,8 @@ impl<T: Ord> BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     /// let mut heap = BinaryHeap::from_vec(vec![1, 3]);
     ///
@@ -387,7 +391,8 @@ impl<T: Ord> BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     /// let mut heap = BinaryHeap::new();
     /// heap.push(1);
@@ -419,7 +424,8 @@ impl<T: Ord> BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     /// let mut heap = BinaryHeap::new();
     ///
@@ -445,7 +451,8 @@ impl<T: Ord> BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     /// let heap = BinaryHeap::from_vec(vec![1, 2, 3, 4, 5, 6, 7]);
     /// let vec = heap.into_vec();
@@ -463,7 +470,8 @@ impl<T: Ord> BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     ///
     /// let mut heap = BinaryHeap::from_vec(vec![1, 2, 4, 5, 7]);
@@ -724,7 +732,8 @@ impl<T: Ord> IntoIterator for BinaryHeap<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// use std::collections::BinaryHeap;
     /// let heap = BinaryHeap::from_vec(vec![1, 2, 3, 4]);
     ///

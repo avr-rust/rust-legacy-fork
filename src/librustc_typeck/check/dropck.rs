@@ -14,9 +14,11 @@ use middle::infer;
 use middle::region;
 use middle::subst::{self, Subst};
 use middle::ty::{self, Ty};
+use util::nodemap::FnvHashSet;
 
 use syntax::ast;
 use syntax::codemap::{self, Span};
+use syntax::parse::token::special_idents;
 
 /// check_drop_impl confirms that the Drop implementation identfied by
 /// `drop_impl_did` is not any more specialized than the type it is
@@ -40,19 +42,18 @@ pub fn check_drop_impl(tcx: &ty::ctxt, drop_impl_did: ast::DefId) -> Result<(), 
                          ty: dtor_self_type } = tcx.lookup_item_type(drop_impl_did);
     let dtor_predicates = tcx.lookup_predicates(drop_impl_did);
     match dtor_self_type.sty {
-        ty::TyEnum(self_type_did, self_to_impl_substs) |
-        ty::TyStruct(self_type_did, self_to_impl_substs) |
-        ty::TyClosure(self_type_did, self_to_impl_substs) => {
+        ty::TyEnum(adt_def, self_to_impl_substs) |
+        ty::TyStruct(adt_def, self_to_impl_substs) => {
             try!(ensure_drop_params_and_item_params_correspond(tcx,
                                                                drop_impl_did,
                                                                dtor_generics,
                                                                &dtor_self_type,
-                                                               self_type_did));
+                                                               adt_def.did));
 
             ensure_drop_predicates_are_implied_by_item_defn(tcx,
                                                             drop_impl_did,
                                                             &dtor_predicates,
-                                                            self_type_did,
+                                                            adt_def.did,
                                                             self_to_impl_substs)
         }
         _ => {
@@ -259,17 +260,20 @@ pub fn check_safety_of_destructor_if_necessary<'a, 'tcx>(rcx: &mut Rcx<'a, 'tcx>
     debug!("check_safety_of_destructor_if_necessary typ: {:?} scope: {:?}",
            typ, scope);
 
-    // types that have been traversed so far by `traverse_type_if_unseen`
-    let mut breadcrumbs: Vec<Ty<'tcx>> = Vec::new();
+    let parent_scope = rcx.tcx().region_maps.opt_encl_scope(scope).unwrap_or_else(|| {
+        rcx.tcx().sess.span_bug(
+            span, &format!("no enclosing scope found for scope: {:?}", scope))
+    });
 
     let result = iterate_over_potentially_unsafe_regions_in_type(
-        rcx,
-        &mut breadcrumbs,
+        &mut DropckContext {
+            rcx: rcx,
+            span: span,
+            parent_scope: parent_scope,
+            breadcrumbs: FnvHashSet()
+        },
         TypeContext::Root,
         typ,
-        span,
-        scope,
-        0,
         0);
     match result {
         Ok(()) => {}
@@ -282,25 +286,26 @@ pub fn check_safety_of_destructor_if_necessary<'a, 'tcx>(rcx: &mut Rcx<'a, 'tcx>
                     // no need for an additional note if the overflow
                     // was somehow on the root.
                 }
-                TypeContext::EnumVariant { def_id, variant, arg_index } => {
-                    // FIXME (pnkfelix): eventually lookup arg_name
-                    // for the given index on struct variants.
+                TypeContext::ADT { def_id, variant, field, field_index } => {
+                    let adt = tcx.lookup_adt_def(def_id);
+                    let variant_name = match adt.adt_kind() {
+                        ty::AdtKind::Enum => format!("enum {} variant {}",
+                                                     tcx.item_path_str(def_id),
+                                                     variant),
+                        ty::AdtKind::Struct => format!("struct {}",
+                                                       tcx.item_path_str(def_id))
+                    };
+                    let field_name = if field == special_idents::unnamed_field.name {
+                        format!("#{}", field_index)
+                    } else {
+                        format!("`{}`", field)
+                    };
                     span_note!(
                         rcx.tcx().sess,
                         span,
-                        "overflowed on enum {} variant {} argument {} type: {}",
-                        tcx.item_path_str(def_id),
-                        variant,
-                        arg_index,
-                        detected_on_typ);
-                }
-                TypeContext::Struct { def_id, field } => {
-                    span_note!(
-                        rcx.tcx().sess,
-                        span,
-                        "overflowed on struct {} field {} type: {}",
-                        tcx.item_path_str(def_id),
-                        field,
+                        "overflowed on {} field {} type: {}",
+                        variant_name,
+                        field_name,
                         detected_on_typ);
                 }
             }
@@ -312,369 +317,189 @@ enum Error<'tcx> {
     Overflow(TypeContext, ty::Ty<'tcx>),
 }
 
+#[derive(Copy, Clone)]
 enum TypeContext {
     Root,
-    EnumVariant {
+    ADT {
         def_id: ast::DefId,
         variant: ast::Name,
-        arg_index: usize,
-    },
-    Struct {
-        def_id: ast::DefId,
         field: ast::Name,
+        field_index: usize
     }
 }
 
-// The `depth` counts the number of calls to this function;
-// the `xref_depth` counts the subset of such calls that go
-// across a `Box<T>` or `PhantomData<T>`.
-fn iterate_over_potentially_unsafe_regions_in_type<'a, 'tcx>(
-    rcx: &mut Rcx<'a, 'tcx>,
-    breadcrumbs: &mut Vec<Ty<'tcx>>,
-    context: TypeContext,
-    ty_root: ty::Ty<'tcx>,
+struct DropckContext<'a, 'b: 'a, 'tcx: 'b> {
+    rcx: &'a mut Rcx<'b, 'tcx>,
+    /// types that have already been traversed
+    breadcrumbs: FnvHashSet<Ty<'tcx>>,
+    /// span for error reporting
     span: Span,
-    scope: region::CodeExtent,
-    depth: usize,
-    xref_depth: usize) -> Result<(), Error<'tcx>>
+    /// the scope reachable dtorck types must outlive
+    parent_scope: region::CodeExtent
+}
+
+// `context` is used for reporting overflow errors
+fn iterate_over_potentially_unsafe_regions_in_type<'a, 'b, 'tcx>(
+    cx: &mut DropckContext<'a, 'b, 'tcx>,
+    context: TypeContext,
+    ty: Ty<'tcx>,
+    depth: usize) -> Result<(), Error<'tcx>>
 {
+    let tcx = cx.rcx.tcx();
     // Issue #22443: Watch out for overflow. While we are careful to
     // handle regular types properly, non-regular ones cause problems.
-    let recursion_limit = rcx.tcx().sess.recursion_limit.get();
-    if xref_depth >= recursion_limit {
-        return Err(Error::Overflow(context, ty_root))
+    let recursion_limit = tcx.sess.recursion_limit.get();
+    if depth / 4 >= recursion_limit {
+        // This can get into rather deep recursion, especially in the
+        // presence of things like Vec<T> -> Unique<T> -> PhantomData<T> -> T.
+        // use a higher recursion limit to avoid errors.
+        return Err(Error::Overflow(context, ty))
     }
 
-    let origin = || infer::SubregionOrigin::SafeDestructor(span);
-    let mut walker = ty_root.walk();
-    let opt_phantom_data_def_id = rcx.tcx().lang_items.phantom_data();
-
-    let destructor_for_type = rcx.tcx().destructor_for_type.borrow();
-
-    let xref_depth_orig = xref_depth;
-
-    while let Some(typ) = walker.next() {
-        // Avoid recursing forever.
-        if breadcrumbs.contains(&typ) {
-            continue;
-        }
-        breadcrumbs.push(typ);
-
-        // If we encounter `PhantomData<T>`, then we should replace it
-        // with `T`, the type it represents as owned by the
-        // surrounding context, before doing further analysis.
-        let (typ, xref_depth) = match typ.sty {
-            ty::TyStruct(struct_did, substs) => {
-                if opt_phantom_data_def_id == Some(struct_did) {
-                    let item_type = rcx.tcx().lookup_item_type(struct_did);
-                    let tp_def = item_type.generics.types
-                        .opt_get(subst::TypeSpace, 0).unwrap();
-                    let new_typ = substs.type_for_def(tp_def);
-                    debug!("replacing phantom {:?} with {:?}",
-                           typ, new_typ);
-                    (new_typ, xref_depth_orig + 1)
-                } else {
-                    (typ, xref_depth_orig)
-                }
-            }
-
-            // Note: When TyBox is removed from compiler, the
-            // definition of `Box<T>` must carry a PhantomData that
-            // puts us into the previous case.
-            ty::TyBox(new_typ) => {
-                debug!("replacing TyBox {:?} with {:?}",
-                       typ, new_typ);
-                (new_typ, xref_depth_orig + 1)
-            }
-
-            _ => {
-                (typ, xref_depth_orig)
-            }
-        };
-
-        let dtor_kind = match typ.sty {
-            ty::TyEnum(def_id, _) |
-            ty::TyStruct(def_id, _) => {
-                match destructor_for_type.get(&def_id) {
-                    Some(def_id) => DtorKind::KnownDropMethod(*def_id),
-                    None => DtorKind::PureRecur,
-                }
-            }
-            ty::TyTrait(ref ty_trait) => {
-                DtorKind::Unknown(ty_trait.bounds.clone())
-            }
-            _ => DtorKind::PureRecur,
-        };
-
+    if !cx.breadcrumbs.insert(ty) {
         debug!("iterate_over_potentially_unsafe_regions_in_type \
-                {}typ: {} scope: {:?} xref: {}",
+               {}ty: {} scope: {:?} - cached",
                (0..depth).map(|_| ' ').collect::<String>(),
-               typ, scope, xref_depth);
+               ty, cx.parent_scope);
+        return Ok(()); // we already visited this type
+    }
+    debug!("iterate_over_potentially_unsafe_regions_in_type \
+           {}ty: {} scope: {:?}",
+           (0..depth).map(|_| ' ').collect::<String>(),
+           ty, cx.parent_scope);
 
-        // If `typ` has a destructor, then we must ensure that all
-        // borrowed data reachable via `typ` must outlive the parent
-        // of `scope`. This is handled below.
-        //
-        // However, there is an important special case: by
-        // parametricity, any generic type parameters have *no* trait
-        // bounds in the Drop impl can not be used in any way (apart
-        // from being dropped), and thus we can treat data borrowed
-        // via such type parameters remains unreachable.
-        //
-        // For example, consider `impl<T> Drop for Vec<T> { ... }`,
-        // which does have to be able to drop instances of `T`, but
-        // otherwise cannot read data from `T`.
-        //
-        // Of course, for the type expression passed in for any such
-        // unbounded type parameter `T`, we must resume the recursive
-        // analysis on `T` (since it would be ignored by
-        // type_must_outlive).
-        //
-        // FIXME (pnkfelix): Long term, we could be smart and actually
-        // feed which generic parameters can be ignored *into* `fn
-        // type_must_outlive` (or some generalization thereof). But
-        // for the short term, it probably covers most cases of
-        // interest to just special case Drop impls where: (1.) there
-        // are no generic lifetime parameters and (2.)  *all* generic
-        // type parameters are unbounded.  If both conditions hold, we
-        // simply skip the `type_must_outlive` call entirely (but
-        // resume the recursive checking of the type-substructure).
+    // If `typ` has a destructor, then we must ensure that all
+    // borrowed data reachable via `typ` must outlive the parent
+    // of `scope`. This is handled below.
+    //
+    // However, there is an important special case: by
+    // parametricity, any generic type parameters have *no* trait
+    // bounds in the Drop impl can not be used in any way (apart
+    // from being dropped), and thus we can treat data borrowed
+    // via such type parameters remains unreachable.
+    //
+    // For example, consider `impl<T> Drop for Vec<T> { ... }`,
+    // which does have to be able to drop instances of `T`, but
+    // otherwise cannot read data from `T`.
+    //
+    // Of course, for the type expression passed in for any such
+    // unbounded type parameter `T`, we must resume the recursive
+    // analysis on `T` (since it would be ignored by
+    // type_must_outlive).
+    //
+    // FIXME (pnkfelix): Long term, we could be smart and actually
+    // feed which generic parameters can be ignored *into* `fn
+    // type_must_outlive` (or some generalization thereof). But
+    // for the short term, it probably covers most cases of
+    // interest to just special case Drop impls where: (1.) there
+    // are no generic lifetime parameters and (2.)  *all* generic
+    // type parameters are unbounded.  If both conditions hold, we
+    // simply skip the `type_must_outlive` call entirely (but
+    // resume the recursive checking of the type-substructure).
+    if has_dtor_of_interest(tcx, ty) {
+        debug!("iterate_over_potentially_unsafe_regions_in_type \
+                {}ty: {} - is a dtorck type!",
+               (0..depth).map(|_| ' ').collect::<String>(),
+               ty);
 
-        if has_dtor_of_interest(rcx.tcx(), dtor_kind, typ, span) {
-            // If `typ` has a destructor, then we must ensure that all
-            // borrowed data reachable via `typ` must outlive the
-            // parent of `scope`. (It does not suffice for it to
-            // outlive `scope` because that could imply that the
-            // borrowed data is torn down in between the end of
-            // `scope` and when the destructor itself actually runs.)
+        regionck::type_must_outlive(cx.rcx,
+                                    infer::SubregionOrigin::SafeDestructor(cx.span),
+                                    ty,
+                                    ty::ReScope(cx.parent_scope));
 
-            let parent_region =
-                match rcx.tcx().region_maps.opt_encl_scope(scope) {
-                    Some(parent_scope) => ty::ReScope(parent_scope),
-                    None => rcx.tcx().sess.span_bug(
-                        span, &format!("no enclosing scope found for scope: {:?}",
-                                       scope)),
-                };
-
-            regionck::type_must_outlive(rcx, origin(), typ, parent_region);
-
-        } else {
-            // Okay, `typ` itself is itself not reachable by a
-            // destructor; but it may contain substructure that has a
-            // destructor.
-
-            match typ.sty {
-                ty::TyStruct(struct_did, substs) => {
-                    debug!("typ: {:?} is struct; traverse structure and not type-expression",
-                           typ);
-                    // Don't recurse; we extract type's substructure,
-                    // so do not process subparts of type expression.
-                    walker.skip_current_subtree();
-
-                    let fields =
-                        rcx.tcx().lookup_struct_fields(struct_did);
-                    for field in &fields {
-                        let field_type = rcx.tcx().lookup_field_type(struct_did,
-                                                                     field.id,
-                                                                     substs);
-                        try!(iterate_over_potentially_unsafe_regions_in_type(
-                            rcx,
-                            breadcrumbs,
-                            TypeContext::Struct {
-                                def_id: struct_did,
-                                field: field.name,
-                            },
-                            field_type,
-                            span,
-                            scope,
-                            depth+1,
-                            xref_depth))
-                    }
-                }
-
-                ty::TyEnum(enum_did, substs) => {
-                    debug!("typ: {:?} is enum; traverse structure and not type-expression",
-                           typ);
-                    // Don't recurse; we extract type's substructure,
-                    // so do not process subparts of type expression.
-                    walker.skip_current_subtree();
-
-                    let all_variant_info =
-                        rcx.tcx().substd_enum_variants(enum_did, substs);
-                    for variant_info in &all_variant_info {
-                        for (i, arg_type) in variant_info.args.iter().enumerate() {
-                            try!(iterate_over_potentially_unsafe_regions_in_type(
-                                rcx,
-                                breadcrumbs,
-                                TypeContext::EnumVariant {
-                                    def_id: enum_did,
-                                    variant: variant_info.name,
-                                    arg_index: i,
-                                },
-                                *arg_type,
-                                span,
-                                scope,
-                                depth+1,
-                                xref_depth));
-                        }
-                    }
-                }
-
-                ty::TyRef(..) | ty::TyRawPtr(_) | ty::TyBareFn(..) => {
-                    // Don't recurse, since references, pointers,
-                    // and bare functions don't own instances
-                    // of the types appearing within them.
-                    walker.skip_current_subtree();
-                }
-                _ => {}
-            };
-
-            // You might be tempted to pop breadcrumbs here after
-            // processing type's internals above, but then you hit
-            // exponential time blowup e.g. on
-            // compile-fail/huge-struct.rs. Instead, we do not remove
-            // anything from the breadcrumbs vector during any particular
-            // traversal, and instead clear it after the whole traversal
-            // is done.
-        }
+        return Ok(());
     }
 
-    return Ok(());
-}
+    debug!("iterate_over_potentially_unsafe_regions_in_type \
+           {}ty: {} scope: {:?} - checking interior",
+           (0..depth).map(|_| ' ').collect::<String>(),
+           ty, cx.parent_scope);
 
-enum DtorKind<'tcx> {
-    // Type has an associated drop method with this def id
-    KnownDropMethod(ast::DefId),
+    // We still need to ensure all referenced data is safe.
+    match ty.sty {
+        ty::TyBool | ty::TyChar | ty::TyInt(_) | ty::TyUint(_) |
+        ty::TyFloat(_) | ty::TyStr => {
+            // primitive - definitely safe
+            Ok(())
+        }
 
-    // Type has no destructor (or its dtor is known to be pure
-    // with respect to lifetimes), though its *substructure*
-    // may carry a destructor.
-    PureRecur,
+        ty::TyBox(ity) | ty::TyArray(ity, _) | ty::TySlice(ity) => {
+            // single-element containers, behave like their element
+            iterate_over_potentially_unsafe_regions_in_type(
+                cx, context, ity, depth+1)
+        }
 
-    // Type may have impure destructor that is unknown;
-    // e.g. `Box<Trait+'a>`
-    Unknown(ty::ExistentialBounds<'tcx>),
+        ty::TyStruct(def, substs) if def.is_phantom_data() => {
+            // PhantomData<T> - behaves identically to T
+            let ity = *substs.types.get(subst::TypeSpace, 0);
+            iterate_over_potentially_unsafe_regions_in_type(
+                cx, context, ity, depth+1)
+        }
+
+        ty::TyStruct(def, substs) | ty::TyEnum(def, substs) => {
+            let did = def.did;
+            for variant in &def.variants {
+                for (i, field) in variant.fields.iter().enumerate() {
+                    let fty = field.ty(tcx, substs);
+                    let fty = cx.rcx.fcx.resolve_type_vars_if_possible(
+                        cx.rcx.fcx.normalize_associated_types_in(cx.span, &fty));
+                    try!(iterate_over_potentially_unsafe_regions_in_type(
+                        cx,
+                        TypeContext::ADT {
+                            def_id: did,
+                            field: field.name,
+                            variant: variant.name,
+                            field_index: i
+                        },
+                        fty,
+                        depth+1))
+                }
+            }
+            Ok(())
+        }
+
+        ty::TyTuple(ref tys) |
+        ty::TyClosure(_, box ty::ClosureSubsts { upvar_tys: ref tys, .. }) => {
+            for ty in tys {
+                try!(iterate_over_potentially_unsafe_regions_in_type(
+                    cx, context, ty, depth+1))
+            }
+            Ok(())
+        }
+
+        ty::TyRawPtr(..) | ty::TyRef(..) | ty::TyParam(..) => {
+            // these always come with a witness of liveness (references
+            // explicitly, pointers implicitly, parameters by the
+            // caller).
+            Ok(())
+        }
+
+        ty::TyBareFn(..) => {
+            // FIXME(#26656): this type is always destruction-safe, but
+            // it implicitly witnesses Self: Fn, which can be false.
+            Ok(())
+        }
+
+        ty::TyInfer(..) | ty::TyError => {
+            tcx.sess.delay_span_bug(cx.span, "unresolved type in regionck");
+            Ok(())
+        }
+
+        // these are always dtorck
+        ty::TyTrait(..) | ty::TyProjection(_) => unreachable!(),
+    }
 }
 
 fn has_dtor_of_interest<'tcx>(tcx: &ty::ctxt<'tcx>,
-                              dtor_kind: DtorKind,
-                              typ: ty::Ty<'tcx>,
-                              span: Span) -> bool {
-    let has_dtor_of_interest: bool;
-
-    match dtor_kind {
-        DtorKind::PureRecur => {
-            has_dtor_of_interest = false;
-            debug!("typ: {:?} has no dtor, and thus is uninteresting",
-                   typ);
+                              ty: ty::Ty<'tcx>) -> bool {
+    match ty.sty {
+        ty::TyEnum(def, _) | ty::TyStruct(def, _) => {
+            def.is_dtorck(tcx)
         }
-        DtorKind::Unknown(bounds) => {
-            match bounds.region_bound {
-                ty::ReStatic => {
-                    debug!("trait: {:?} has 'static bound, and thus is uninteresting",
-                           typ);
-                    has_dtor_of_interest = false;
-                }
-                ty::ReEmpty => {
-                    debug!("trait: {:?} has empty region bound, and thus is uninteresting",
-                           typ);
-                    has_dtor_of_interest = false;
-                }
-                r => {
-                    debug!("trait: {:?} has non-static bound: {:?}; assumed interesting",
-                           typ, r);
-                    has_dtor_of_interest = true;
-                }
-            }
-        }
-        DtorKind::KnownDropMethod(dtor_method_did) => {
-            let impl_did = tcx.impl_of_method(dtor_method_did)
-                .unwrap_or_else(|| {
-                    tcx.sess.span_bug(
-                        span, "no Drop impl found for drop method")
-                });
-
-            let dtor_typescheme = tcx.lookup_item_type(impl_did);
-            let dtor_generics = dtor_typescheme.generics;
-
-            let mut has_pred_of_interest = false;
-
-            let mut seen_items = Vec::new();
-            let mut items_to_inspect = vec![impl_did];
-            'items: while let Some(item_def_id) = items_to_inspect.pop() {
-                if seen_items.contains(&item_def_id) {
-                    continue;
-                }
-
-                for pred in tcx.lookup_predicates(item_def_id).predicates {
-                    let result = match pred {
-                        ty::Predicate::Equate(..) |
-                        ty::Predicate::RegionOutlives(..) |
-                        ty::Predicate::TypeOutlives(..) |
-                        ty::Predicate::Projection(..) => {
-                            // For now, assume all these where-clauses
-                            // may give drop implementation capabilty
-                            // to access borrowed data.
-                            true
-                        }
-
-                        ty::Predicate::Trait(ty::Binder(ref t_pred)) => {
-                            let def_id = t_pred.trait_ref.def_id;
-                            if tcx.trait_items(def_id).len() != 0 {
-                                // If trait has items, assume it adds
-                                // capability to access borrowed data.
-                                true
-                            } else {
-                                // Trait without items is itself
-                                // uninteresting from POV of dropck.
-                                //
-                                // However, may have parent w/ items;
-                                // so schedule checking of predicates,
-                                items_to_inspect.push(def_id);
-                                // and say "no capability found" for now.
-                                false
-                            }
-                        }
-                    };
-
-                    if result {
-                        has_pred_of_interest = true;
-                        debug!("typ: {:?} has interesting dtor due to generic preds, e.g. {:?}",
-                               typ, pred);
-                        break 'items;
-                    }
-                }
-
-                seen_items.push(item_def_id);
-            }
-
-            // In `impl<'a> Drop ...`, we automatically assume
-            // `'a` is meaningful and thus represents a bound
-            // through which we could reach borrowed data.
-            //
-            // FIXME (pnkfelix): In the future it would be good to
-            // extend the language to allow the user to express,
-            // in the impl signature, that a lifetime is not
-            // actually used (something like `where 'a: ?Live`).
-            let has_region_param_of_interest =
-                dtor_generics.has_region_params(subst::TypeSpace);
-
-            has_dtor_of_interest =
-                has_region_param_of_interest ||
-                has_pred_of_interest;
-
-            if has_dtor_of_interest {
-                debug!("typ: {:?} has interesting dtor, due to \
-                        region params: {} or pred: {}",
-                       typ,
-                       has_region_param_of_interest,
-                       has_pred_of_interest);
-            } else {
-                debug!("typ: {:?} has dtor, but it is uninteresting",
-                       typ);
-            }
-        }
+        ty::TyTrait(..) | ty::TyProjection(..) => {
+            debug!("ty: {:?} isn't known, and therefore is a dropck type", ty);
+            true
+        },
+        _ => false
     }
-
-    return has_dtor_of_interest;
 }

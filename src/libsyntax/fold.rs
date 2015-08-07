@@ -429,6 +429,9 @@ pub fn noop_fold_ty<T: Folder>(t: P<Ty>, fld: &mut T) -> P<Ty> {
             TyPolyTraitRef(bounds) => {
                 TyPolyTraitRef(bounds.move_map(|b| fld.fold_ty_param_bound(b)))
             }
+            TyMac(mac) => {
+                TyMac(fld.fold_mac(mac))
+            }
         },
         span: fld.new_span(span)
     })
@@ -515,12 +518,11 @@ pub fn noop_fold_parenthesized_parameter_data<T: Folder>(data: ParenthesizedPara
 }
 
 pub fn noop_fold_local<T: Folder>(l: P<Local>, fld: &mut T) -> P<Local> {
-    l.map(|Local {id, pat, ty, init, source, span}| Local {
+    l.map(|Local {id, pat, ty, init, span}| Local {
         id: fld.new_id(id),
         ty: ty.map(|t| fld.fold_ty(t)),
         pat: fld.fold_pat(pat),
         init: init.map(|e| fld.fold_expr(e)),
-        source: source,
         span: fld.new_span(span)
     })
 }

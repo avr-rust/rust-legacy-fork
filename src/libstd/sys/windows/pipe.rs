@@ -8,6 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[cfg(stage0)]
 use prelude::v1::*;
 
 use io;
@@ -37,6 +38,7 @@ pub fn anon_pipe() -> io::Result<(AnonPipe, AnonPipe)> {
 
 impl AnonPipe {
     pub fn handle(&self) -> &Handle { &self.inner }
+    pub fn into_handle(self) -> Handle { self.inner }
 
     pub fn raw(&self) -> libc::HANDLE { self.inner.raw() }
 

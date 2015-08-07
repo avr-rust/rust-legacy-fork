@@ -279,7 +279,7 @@ impl<'tcx> fmt::Display for ty::TraitTy<'tcx> {
                                .expect("could not lift TraitRef for printing");
             let projections = tcx.lift(&bounds.projection_bounds[..])
                                  .expect("could not lift projections for printing");
-            let projections = projections.map_in_place(|p| p.0);
+            let projections = projections.into_iter().map(|p| p.0).collect();
 
             let tap = ty::Binder(TraitAndProjections(principal, projections));
             in_binder(f, tcx, &ty::Binder(""), Some(tap))
@@ -363,6 +363,14 @@ impl<'tcx> fmt::Debug for ty::TraitDef<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "TraitDef(generics={:?}, trait_ref={:?})",
                self.generics, self.trait_ref)
+    }
+}
+
+impl<'tcx, 'container> fmt::Debug for ty::AdtDefData<'tcx, 'container> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        ty::tls::with(|tcx| {
+            write!(f, "{}", tcx.item_path_str(self.did))
+        })
     }
 }
 
@@ -648,36 +656,49 @@ impl<'tcx> fmt::Display for ty::TypeVariants<'tcx> {
             TyInfer(infer_ty) => write!(f, "{}", infer_ty),
             TyError => write!(f, "[type error]"),
             TyParam(ref param_ty) => write!(f, "{}", param_ty),
-            TyEnum(did, substs) | TyStruct(did, substs) => {
+            TyEnum(def, substs) | TyStruct(def, substs) => {
                 ty::tls::with(|tcx| {
-                    if did.krate == ast::LOCAL_CRATE &&
-                          !tcx.tcache.borrow().contains_key(&did) {
-                        write!(f, "{}<..>", tcx.item_path_str(did))
+                    if def.did.krate == ast::LOCAL_CRATE &&
+                          !tcx.tcache.borrow().contains_key(&def.did) {
+                        write!(f, "{}<..>", tcx.item_path_str(def.did))
                     } else {
-                        parameterized(f, substs, did, &[],
-                                      |tcx| tcx.lookup_item_type(did).generics)
+                        parameterized(f, substs, def.did, &[],
+                                      |tcx| tcx.lookup_item_type(def.did).generics)
                     }
                 })
             }
             TyTrait(ref data) => write!(f, "{}", data),
             ty::TyProjection(ref data) => write!(f, "{}", data),
             TyStr => write!(f, "str"),
-            TyClosure(ref did, substs) => ty::tls::with(|tcx| {
+            TyClosure(ref did, ref substs) => ty::tls::with(|tcx| {
                 try!(write!(f, "[closure"));
-                let closure_tys = &tcx.tables.borrow().closure_tys;
-                try!(closure_tys.get(did).map(|cty| &cty.sig).and_then(|sig| {
-                    tcx.lift(&substs).map(|substs| sig.subst(tcx, substs))
-                }).map(|sig| {
-                    fn_sig(f, &sig.0.inputs, false, sig.0.output)
-                }).unwrap_or_else(|| {
-                    if did.krate == ast::LOCAL_CRATE {
-                        try!(write!(f, " {:?}", tcx.map.span(did.node)));
+
+                if did.krate == ast::LOCAL_CRATE {
+                    try!(write!(f, "@{:?}", tcx.map.span(did.node)));
+                    let mut sep = " ";
+                    try!(tcx.with_freevars(did.node, |freevars| {
+                        for (freevar, upvar_ty) in freevars.iter().zip(&substs.upvar_tys) {
+                            let node_id = freevar.def.local_node_id();
+                            try!(write!(f,
+                                        "{}{}:{}",
+                                        sep,
+                                        tcx.local_var_name_str(node_id),
+                                        upvar_ty));
+                            sep = ", ";
+                        }
+                        Ok(())
+                    }))
+                } else {
+                    // cross-crate closure types should only be
+                    // visible in trans bug reports, I imagine.
+                    try!(write!(f, "@{:?}", did));
+                    let mut sep = " ";
+                    for (index, upvar_ty) in substs.upvar_tys.iter().enumerate() {
+                        try!(write!(f, "{}{}:{}", sep, index, upvar_ty));
+                        sep = ", ";
                     }
-                    Ok(())
-                }));
-                if verbose() {
-                    try!(write!(f, " id={:?}", did));
                 }
+
                 write!(f, "]")
             }),
             TyArray(ty, sz) => write!(f, "[{}; {}]",  ty, sz),

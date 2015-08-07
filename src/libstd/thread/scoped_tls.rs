@@ -24,7 +24,8 @@
 //! # Examples
 //!
 //! ```
-//! # #![feature(scoped_tls)]
+//! #![feature(scoped_tls)]
+//!
 //! scoped_thread_local!(static FOO: u32);
 //!
 //! // Initially each scoped slot is empty.
@@ -41,6 +42,7 @@
 
 #![unstable(feature = "thread_local_internals")]
 
+#[cfg(stage0)]
 use prelude::v1::*;
 
 #[doc(hidden)]
@@ -69,11 +71,11 @@ pub struct ScopedKey<T> { inner: fn() -> &'static imp::KeyInner<T> }
 #[allow_internal_unstable]
 macro_rules! scoped_thread_local {
     (static $name:ident: $t:ty) => (
-        static $name: ::std::thread::ScopedKey<$t> =
+        static $name: $crate::thread::ScopedKey<$t> =
             __scoped_thread_local_inner!($t);
     );
     (pub static $name:ident: $t:ty) => (
-        pub static $name: ::std::thread::ScopedKey<$t> =
+        pub static $name: $crate::thread::ScopedKey<$t> =
             __scoped_thread_local_inner!($t);
     );
 }
@@ -86,10 +88,10 @@ macro_rules! scoped_thread_local {
 #[cfg(no_elf_tls)]
 macro_rules! __scoped_thread_local_inner {
     ($t:ty) => {{
-        static _KEY: ::std::thread::__ScopedKeyInner<$t> =
-            ::std::thread::__ScopedKeyInner::new();
-        fn _getit() -> &'static ::std::thread::__ScopedKeyInner<$t> { &_KEY }
-        ::std::thread::ScopedKey::new(_getit)
+        static _KEY: $crate::thread::__ScopedKeyInner<$t> =
+            $crate::thread::__ScopedKeyInner::new();
+        fn _getit() -> &'static $crate::thread::__ScopedKeyInner<$t> { &_KEY }
+        $crate::thread::ScopedKey::new(_getit)
     }}
 }
 
@@ -108,10 +110,10 @@ macro_rules! __scoped_thread_local_inner {
                            target_os = "openbsd",
                            target_arch = "aarch64")),
                    thread_local)]
-        static _KEY: ::std::thread::__ScopedKeyInner<$t> =
-            ::std::thread::__ScopedKeyInner::new();
-        fn _getit() -> &'static ::std::thread::__ScopedKeyInner<$t> { &_KEY }
-        ::std::thread::ScopedKey::new(_getit)
+        static _KEY: $crate::thread::__ScopedKeyInner<$t> =
+            $crate::thread::__ScopedKeyInner::new();
+        fn _getit() -> &'static $crate::thread::__ScopedKeyInner<$t> { &_KEY }
+        $crate::thread::ScopedKey::new(_getit)
     }}
 }
 
@@ -136,7 +138,8 @@ impl<T> ScopedKey<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(scoped_tls)]
+    /// #![feature(scoped_tls)]
+    ///
     /// scoped_thread_local!(static FOO: u32);
     ///
     /// FOO.set(&100, || {
@@ -189,7 +192,8 @@ impl<T> ScopedKey<T> {
     /// # Examples
     ///
     /// ```no_run
-    /// # #![feature(scoped_tls)]
+    /// #![feature(scoped_tls)]
+    ///
     /// scoped_thread_local!(static FOO: u32);
     ///
     /// FOO.with(|slot| {
@@ -222,7 +226,7 @@ impl<T> ScopedKey<T> {
               no_elf_tls)))]
 #[doc(hidden)]
 mod imp {
-    use std::cell::Cell;
+    use cell::Cell;
 
     pub struct KeyInner<T> { inner: Cell<*mut T> }
 
@@ -246,6 +250,7 @@ mod imp {
           no_elf_tls))]
 #[doc(hidden)]
 mod imp {
+    #[cfg(stage0)]
     use prelude::v1::*;
 
     use cell::Cell;
@@ -275,6 +280,7 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use cell::Cell;
+    #[cfg(stage0)]
     use prelude::v1::*;
 
     scoped_thread_local!(static FOO: u32);

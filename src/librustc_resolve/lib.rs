@@ -20,6 +20,7 @@
       html_root_url = "http://doc.rust-lang.org/nightly/")]
 
 #![feature(associated_consts)]
+#![feature(borrow_state)]
 #![feature(rc_weak)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
@@ -123,6 +124,10 @@ pub enum ResolutionError<'a> {
     UndeclaredAssociatedType,
     /// error E0407: method is not a member of trait
     MethodNotMemberOfTrait(Name, &'a str),
+    /// error E0437: type is not a member of trait
+    TypeNotMemberOfTrait(Name, &'a str),
+    /// error E0438: const is not a member of trait
+    ConstNotMemberOfTrait(Name, &'a str),
     /// error E0408: variable `{}` from pattern #1 is not bound in pattern
     VariableNotBoundInPattern(Name, usize),
     /// error E0409: variable is bound with different mode in pattern #{} than in pattern #1
@@ -172,7 +177,7 @@ pub enum ResolutionError<'a> {
     /// error E0431: `self` import can only appear in an import list with a non-empty prefix
     SelfImportOnlyInImportListWithNonEmptyPrefix,
     /// error E0432: unresolved import
-    UnresolvedImport(Option<(&'a str, Option<&'a str>)>),
+    UnresolvedImport(Option<(&'a str, &'a str)>),
     /// error E0433: failed to resolve
     FailedToResolve(&'a str),
     /// error E0434: can't capture dynamic environment in a fn item
@@ -218,6 +223,18 @@ fn resolve_error<'b, 'a:'b, 'tcx:'a>(resolver: &'b Resolver<'a, 'tcx>, span: syn
             span_err!(resolver.session, span, E0407,
                          "method `{}` is not a member of trait `{}`",
                          method,
+                         trait_);
+        },
+        ResolutionError::TypeNotMemberOfTrait(type_, trait_) => {
+            span_err!(resolver.session, span, E0437,
+                         "type `{}` is not a member of trait `{}`",
+                         type_,
+                         trait_);
+        },
+        ResolutionError::ConstNotMemberOfTrait(const_, trait_) => {
+            span_err!(resolver.session, span, E0438,
+                         "const `{}` is not a member of trait `{}`",
+                         const_,
                          trait_);
         },
         ResolutionError::VariableNotBoundInPattern(variable_name, pattern_number) => {
@@ -297,8 +314,8 @@ fn resolve_error<'b, 'a:'b, 'tcx:'a>(resolver: &'b Resolver<'a, 'tcx>, span: syn
         },
         ResolutionError::StructVariantUsedAsFunction(path_name) => {
             span_err!(resolver.session, span, E0423,
-                         "`{}` is a struct variant name, but \
-                          this expression \
+                         "`{}` is the name of a struct or struct variant, \
+                          but this expression \
                           uses it like a function name",
                           path_name);
         },
@@ -343,8 +360,7 @@ fn resolve_error<'b, 'a:'b, 'tcx:'a>(resolver: &'b Resolver<'a, 'tcx>, span: syn
         }
         ResolutionError::UnresolvedImport(name) => {
             let msg = match name {
-                Some((n, Some(p))) => format!("unresolved import `{}`{}", n, p),
-                Some((n, None)) => format!("unresolved import (maybe you meant `{}::*`?)", n),
+                Some((n, p)) => format!("unresolved import `{}`{}", n, p),
                 None => "unresolved import".to_owned()
             };
             span_err!(resolver.session, span, E0432, "{}", msg);
@@ -523,8 +539,8 @@ enum ResolveResult<T> {
 }
 
 impl<T> ResolveResult<T> {
-    fn indeterminate(&self) -> bool {
-        match *self { Indeterminate => true, _ => false }
+    fn success(&self) -> bool {
+        match *self { Success(_) => true, _ => false }
     }
 }
 
@@ -716,7 +732,12 @@ impl Module {
     }
 
     fn all_imports_resolved(&self) -> bool {
-        self.imports.borrow().len() == self.resolved_import_count.get()
+        if self.imports.borrow_state() == ::std::cell::BorrowState::Writing {
+            // it is currently being resolved ! so nope
+            false
+        } else {
+            self.imports.borrow().len() == self.resolved_import_count.get()
+        }
     }
 }
 
@@ -1259,7 +1280,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                               name_search_type,
                                               false) {
                 Failed(None) => {
-                    let segment_name = token::get_name(name);
+                    let segment_name = name.as_str();
                     let module_name = module_to_string(&*search_module);
                     let mut span = span;
                     let msg = if "???" == &module_name[..] {
@@ -1672,27 +1693,15 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                  -> ResolveResult<ModulePrefixResult> {
         // Start at the current module if we see `self` or `super`, or at the
         // top of the crate otherwise.
-        let mut containing_module;
-        let mut i;
-        let first_module_path_string = token::get_name(module_path[0]);
-        if "self" == &first_module_path_string[..] {
-            containing_module =
-                self.get_nearest_normal_module_parent_or_self(module_);
-            i = 1;
-        } else if "super" == &first_module_path_string[..] {
-            containing_module =
-                self.get_nearest_normal_module_parent_or_self(module_);
-            i = 0;  // We'll handle `super` below.
-        } else {
-            return Success(NoPrefixFound);
-        }
+        let mut i = match &*module_path[0].as_str() {
+            "self" => 1,
+            "super" => 0,
+            _ => return Success(NoPrefixFound),
+        };
+        let mut containing_module = self.get_nearest_normal_module_parent_or_self(module_);
 
         // Now loop through all the `super`s we find.
-        while i < module_path.len() {
-            let string = token::get_name(module_path[i]);
-            if "super" != &string[..] {
-                break
-            }
+        while i < module_path.len() && "super" == module_path[i].as_str() {
             debug!("(resolving module prefix) resolving `super` at {}",
                    module_to_string(&*containing_module));
             match self.get_nearest_normal_module_parent(containing_module) {
@@ -1811,19 +1820,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         let imports = module_.imports.borrow();
         let import_count = imports.len();
         if index != import_count {
-            let sn = self.session
-                         .codemap()
-                         .span_to_snippet((*imports)[index].span)
-                         .unwrap();
-            if sn.contains("::") {
-                resolve_error(self,
-                              (*imports)[index].span,
-                              ResolutionError::UnresolvedImport(None));
-            } else {
-                resolve_error(self,
-                              (*imports)[index].span,
-                              ResolutionError::UnresolvedImport(Some((&*sn, None))));
-            }
+            resolve_error(self,
+                          (*imports)[index].span,
+                          ResolutionError::UnresolvedImport(None));
         }
 
         // Descend into children and anonymous children.
@@ -2385,10 +2384,11 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                         for impl_item in impl_items {
                             match impl_item.node {
                                 ConstImplItem(..) => {
-                                    // If this is a trait impl, ensure the method
+                                    // If this is a trait impl, ensure the const
                                     // exists in trait
                                     this.check_trait_item(impl_item.ident.name,
-                                                          impl_item.span);
+                                                          impl_item.span,
+                                        |n, s| ResolutionError::ConstNotMemberOfTrait(n, s));
                                     this.with_constant_rib(|this| {
                                         visit::walk_impl_item(this, impl_item);
                                     });
@@ -2397,7 +2397,8 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                     // If this is a trait impl, ensure the method
                                     // exists in trait
                                     this.check_trait_item(impl_item.ident.name,
-                                                          impl_item.span);
+                                                          impl_item.span,
+                                        |n, s| ResolutionError::MethodNotMemberOfTrait(n, s));
 
                                     // We also need a new scope for the method-
                                     // specific type parameters.
@@ -2410,10 +2411,11 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                     });
                                 }
                                 TypeImplItem(ref ty) => {
-                                    // If this is a trait impl, ensure the method
+                                    // If this is a trait impl, ensure the type
                                     // exists in trait
                                     this.check_trait_item(impl_item.ident.name,
-                                                          impl_item.span);
+                                                          impl_item.span,
+                                        |n, s| ResolutionError::TypeNotMemberOfTrait(n, s));
 
                                     this.visit_ty(ty);
                                 }
@@ -2426,15 +2428,15 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         });
     }
 
-    fn check_trait_item(&self, name: Name, span: Span) {
+    fn check_trait_item<F>(&self, name: Name, span: Span, err: F)
+        where F: FnOnce(Name, &str) -> ResolutionError {
         // If there is a TraitRef in scope for an impl, then the method must be in the trait.
         if let Some((did, ref trait_ref)) = self.current_trait_ref {
             if !self.trait_item_map.contains_key(&(name, did)) {
                 let path_str = path_names_to_string(&trait_ref.path, 0);
                 resolve_error(self,
                               span,
-                              ResolutionError::MethodNotMemberOfTrait(name,
-                                                                       &*path_str));
+                              err(name, &*path_str));
             }
         }
     }
@@ -2647,23 +2649,22 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         let pat_id = pattern.id;
         walk_pat(pattern, |pattern| {
             match pattern.node {
-                PatIdent(binding_mode, ref path1, _) => {
-
-                    // The meaning of pat_ident with no type parameters
+                PatIdent(binding_mode, ref path1, ref at_rhs) => {
+                    // The meaning of PatIdent with no type parameters
                     // depends on whether an enum variant or unit-like struct
                     // with that name is in scope. The probing lookup has to
                     // be careful not to emit spurious errors. Only matching
                     // patterns (match) can match nullary variants or
-                    // unit-like structs. For binding patterns (let), matching
-                    // such a value is simply disallowed (since it's rarely
-                    // what you want).
+                    // unit-like structs. For binding patterns (let
+                    // and the LHS of @-patterns), matching such a value is
+                    // simply disallowed (since it's rarely what you want).
+                    let const_ok = mode == RefutableMode && at_rhs.is_none();
 
                     let ident = path1.node;
                     let renamed = mtwt::resolve(ident);
 
                     match self.resolve_bare_identifier_pattern(ident.name, pattern.span) {
-                        FoundStructOrEnumVariant(def, lp)
-                                if mode == RefutableMode => {
+                        FoundStructOrEnumVariant(def, lp) if const_ok => {
                             debug!("(resolving pattern) resolving `{}` to \
                                     struct or enum variant",
                                    renamed);
@@ -2686,7 +2687,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                     renamed)
                             );
                         }
-                        FoundConst(def, lp) if mode == RefutableMode => {
+                        FoundConst(def, lp) if const_ok => {
                             debug!("(resolving pattern) resolving `{}` to \
                                     constant",
                                    renamed);
@@ -2742,7 +2743,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                     self,
                                     pattern.span,
                                     ResolutionError::IdentifierBoundMoreThanOnceInParameterList(
-                                        &*token::get_ident(ident))
+                                        &ident.name.as_str())
                                 );
                             } else if bindings_list.get(&renamed) ==
                                     Some(&pat_id) {
@@ -2752,7 +2753,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                     self,
                                     pattern.span,
                                     ResolutionError::IdentifierBoundMoreThanOnceInSamePattern(
-                                        &*token::get_ident(ident))
+                                        &ident.name.as_str())
                                 );
                             }
                             // Else, not bound in the same pattern: do
@@ -2798,9 +2799,12 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                         self,
                                         path.span,
                                         ResolutionError::NotAnEnumVariantStructOrConst(
-                                            &*token::get_ident(
-                                                path.segments.last().unwrap().identifier)
-                                            )
+                                            &path.segments
+                                                 .last()
+                                                 .unwrap()
+                                                 .identifier
+                                                 .name
+                                                 .as_str())
                                     );
                                 } else {
                                     let const_name = path.segments.last().unwrap()
@@ -2816,7 +2820,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                             self,
                             path.span,
                             ResolutionError::UnresolvedEnumVariantStructOrConst(
-                                &*token::get_ident(path.segments.last().unwrap().identifier))
+                                &path.segments.last().unwrap().identifier.name.as_str())
                         );
                     }
                     visit::walk_path(self, path);
@@ -2853,8 +2857,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                     self,
                                     path.span,
                                     ResolutionError::NotAnAssociatedConst(
-                                        &*token::get_ident(
-                                            path.segments.last().unwrap().identifier)
+                                        &path.segments.last().unwrap().identifier.name.as_str()
                                     )
                                 );
                             }
@@ -2864,7 +2867,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                             self,
                             path.span,
                             ResolutionError::UnresolvedAssociatedConst(
-                                &*token::get_ident(path.segments.last().unwrap().identifier)
+                                &path.segments.last().unwrap().identifier.name.as_str()
                             )
                         );
                     }
@@ -3285,7 +3288,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         match search_result {
             Some(DlDef(def)) => {
                 debug!("(resolving path in local ribs) resolved `{}` to local: {:?}",
-                       token::get_ident(ident),
+                       ident,
                        def);
                 Some(def)
             }
@@ -3440,7 +3443,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         // Look for a method in the current self type's impl module.
         if let Some(module) = get_module(self, path.span, &name_path) {
             if let Some(binding) = module.children.borrow().get(&name) {
-                if let Some(DefMethod(did, _)) = binding.def_for_namespace(ValueNS) {
+                if let Some(DefMethod(did)) = binding.def_for_namespace(ValueNS) {
                     if is_static_method(self, did) {
                         return StaticMethod(path_names_to_string(&path, 0))
                     }
@@ -3473,7 +3476,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
 
         for rib in self.value_ribs.iter().rev() {
             for (&k, _) in &rib.bindings {
-                maybes.push(token::get_name(k));
+                maybes.push(k.as_str());
                 values.push(usize::MAX);
             }
         }
@@ -3605,8 +3608,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                 false // Stop advancing
                             });
 
-                            if method_scope &&
-                               &token::get_name(special_names::self_)[..] == path_name {
+                            if method_scope && special_names::self_ == path_name {
                                 resolve_error(
                                     self,
                                     expr.span,
@@ -3687,7 +3689,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                     None => {
                         resolve_error(self,
                                       expr.span,
-                                      ResolutionError::UndeclaredLabel(&*token::get_ident(label)))
+                                      ResolutionError::UndeclaredLabel(&label.name.as_str()))
                     }
                     Some(DlDef(def @ DefLabel(_))) => {
                         // Since this def is a label, it is never read.
@@ -3893,7 +3895,7 @@ fn names_to_string(names: &[Name]) -> String {
         } else {
             result.push_str("::")
         }
-        result.push_str(&token::get_name(*name));
+        result.push_str(&name.as_str());
     };
     result
 }

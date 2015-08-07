@@ -12,7 +12,8 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use core::fmt;
 use core::hash;
@@ -89,7 +90,8 @@ impl String {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(collections)]
+    /// #![feature(collections)]
+    ///
     /// let s = String::from("hello");
     /// assert_eq!(&s[..], "hello");
     /// ```
@@ -702,7 +704,7 @@ impl String {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(drain)]
+    /// #![feature(drain)]
     ///
     /// let mut s = String::from("α is alpha, β is beta");
     /// let beta_offset = s.find('β').unwrap_or(s.len());
@@ -979,7 +981,6 @@ impl ops::Index<ops::RangeFull> for String {
     }
 }
 
-#[cfg(not(stage0))]
 #[stable(feature = "derefmut_for_string", since = "1.2.0")]
 impl ops::IndexMut<ops::Range<usize>> for String {
     #[inline]
@@ -987,7 +988,6 @@ impl ops::IndexMut<ops::Range<usize>> for String {
         &mut self[..][index]
     }
 }
-#[cfg(not(stage0))]
 #[stable(feature = "derefmut_for_string", since = "1.2.0")]
 impl ops::IndexMut<ops::RangeTo<usize>> for String {
     #[inline]
@@ -995,7 +995,6 @@ impl ops::IndexMut<ops::RangeTo<usize>> for String {
         &mut self[..][index]
     }
 }
-#[cfg(not(stage0))]
 #[stable(feature = "derefmut_for_string", since = "1.2.0")]
 impl ops::IndexMut<ops::RangeFrom<usize>> for String {
     #[inline]

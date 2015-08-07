@@ -8,7 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
 
 use libc::types::os::arch::extra::{LPVOID, DWORD, LONG};
 use libc;
@@ -82,6 +83,7 @@ pub unsafe fn make_handler() -> Handler {
     Handler { _data: 0 as *mut libc::c_void }
 }
 
+#[repr(C)]
 pub struct EXCEPTION_RECORD {
     pub ExceptionCode: DWORD,
     pub ExceptionFlags: DWORD,
@@ -91,6 +93,7 @@ pub struct EXCEPTION_RECORD {
     pub ExceptionInformation: [LPVOID; EXCEPTION_MAXIMUM_PARAMETERS]
 }
 
+#[repr(C)]
 pub struct EXCEPTION_POINTERS {
     pub ExceptionRecord: *mut EXCEPTION_RECORD,
     pub ContextRecord: LPVOID

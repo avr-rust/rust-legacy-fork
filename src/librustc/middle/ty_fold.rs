@@ -275,15 +275,6 @@ impl<'tcx> TypeFoldable<'tcx> for ty::TraitRef<'tcx> {
     }
 }
 
-impl<'tcx> TypeFoldable<'tcx> for ty::Field<'tcx> {
-    fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> ty::Field<'tcx> {
-        ty::Field {
-            name: self.name,
-            mt: self.mt.fold_with(folder),
-        }
-    }
-}
-
 impl<'tcx> TypeFoldable<'tcx> for ty::Region {
     fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> ty::Region {
         folder.fold_region(*self)
@@ -293,6 +284,16 @@ impl<'tcx> TypeFoldable<'tcx> for ty::Region {
 impl<'tcx> TypeFoldable<'tcx> for subst::Substs<'tcx> {
     fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> subst::Substs<'tcx> {
         folder.fold_substs(self)
+    }
+}
+
+impl<'tcx> TypeFoldable<'tcx> for ty::ClosureSubsts<'tcx> {
+    fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> ty::ClosureSubsts<'tcx> {
+        let func_substs = self.func_substs.fold_with(folder);
+        ty::ClosureSubsts {
+            func_substs: folder.tcx().mk_substs(func_substs),
+            upvar_tys: self.upvar_tys.fold_with(folder),
+        }
     }
 }
 
@@ -330,6 +331,7 @@ impl<'tcx> TypeFoldable<'tcx> for ty::TypeParameterDef<'tcx> {
             space: self.space,
             index: self.index,
             default: self.default.fold_with(folder),
+            default_def_id: self.default_def_id,
             object_lifetime_default: self.object_lifetime_default.fold_with(folder),
         }
     }
@@ -604,7 +606,7 @@ pub fn super_fold_ty<'tcx, T: TypeFolder<'tcx>>(this: &mut T,
         }
         ty::TyClosure(did, ref substs) => {
             let s = substs.fold_with(this);
-            ty::TyClosure(did, this.tcx().mk_substs(s))
+            ty::TyClosure(did, s)
         }
         ty::TyProjection(ref data) => {
             ty::TyProjection(data.fold_with(this))

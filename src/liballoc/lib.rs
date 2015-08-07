@@ -75,13 +75,15 @@
 #![feature(coerce_unsized)]
 #![feature(core)]
 #![feature(core_intrinsics)]
-#![feature(core_prelude)]
+#![feature(core_slice_ext)]
 #![feature(custom_attribute)]
 #![feature(fundamental)]
 #![feature(lang_items)]
 #![feature(no_std)]
 #![feature(nonzero)]
 #![feature(optin_builtin_traits)]
+#![feature(placement_in_syntax)]
+#![feature(placement_new_protocol)]
 #![feature(raw)]
 #![feature(staged_api)]
 #![feature(unboxed_closures)]
@@ -89,16 +91,17 @@
 #![feature(unsafe_no_drop_flag, filling_drop)]
 #![feature(unsize)]
 #![feature(core_slice_ext)]
+#![feature(core_str_ext)]
+#![cfg_attr(stage0, feature(core, core_prelude))]
 
 #![cfg_attr(test, feature(test, alloc, rustc_private, box_raw))]
 #![cfg_attr(all(not(feature = "external_funcs"), not(feature = "external_crate")),
             feature(libc))]
 
-#[macro_use]
-extern crate core;
-
 #[cfg(all(not(feature = "external_funcs"), not(feature = "external_crate")))]
 extern crate libc;
+
+#[cfg(stage0)] #[macro_use] extern crate core;
 
 // Allow testing this library
 
@@ -135,20 +138,3 @@ pub fn oom() -> ! {
     //                allocate.
     unsafe { core::intrinsics::abort() }
 }
-
-// FIXME(#14344): When linking liballoc with libstd, this library will be linked
-//                as an rlib (it only exists as an rlib). It turns out that an
-//                optimized standard library doesn't actually use *any* symbols
-//                from this library. Everything is inlined and optimized away.
-//                This means that linkers will actually omit the object for this
-//                file, even though it may be needed in the future.
-//
-//                To get around this for now, we define a dummy symbol which
-//                will never get inlined so the stdlib can call it. The stdlib's
-//                reference to this symbol will cause this library's object file
-//                to get linked in to libstd successfully (the linker won't
-//                optimize it out).
-#[doc(hidden)]
-#[unstable(feature = "issue_14344_fixme")]
-#[cfg(stage0)]
-pub fn fixme_14344_be_sure_to_link_to_collections() {}

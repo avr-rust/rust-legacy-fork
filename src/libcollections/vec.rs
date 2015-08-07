@@ -58,7 +58,9 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use core::prelude::*;
+#[cfg(stage0)]
+use core::prelude::v1::*;
+
 use alloc::raw_vec::RawVec;
 use alloc::boxed::Box;
 use alloc::heap::EMPTY;
@@ -110,6 +112,13 @@ use super::range::RangeArgument;
 /// let mut vec = vec![1, 2, 3];
 /// vec.push(4);
 /// assert_eq!(vec, [1, 2, 3, 4]);
+/// ```
+///
+/// It can also initialize each element of a `Vec<T>` with a given value:
+///
+/// ```
+/// let vec = vec![0; 5];
+/// assert_eq!(vec, [0, 0, 0, 0, 0]);
 /// ```
 ///
 /// Use a `Vec<T>` as an efficient stack:
@@ -574,7 +583,7 @@ impl<T> Vec<T> {
     /// # Examples
     ///
     /// ```
-    /// let mut vec = vec!(1, 2);
+    /// let mut vec = vec![1, 2];
     /// vec.push(3);
     /// assert_eq!(vec, [1, 2, 3]);
     /// ```
@@ -622,7 +631,8 @@ impl<T> Vec<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(append)]
+    /// #![feature(append)]
+    ///
     /// let mut vec = vec![1, 2, 3];
     /// let mut vec2 = vec![4, 5, 6];
     /// vec.append(&mut vec2);
@@ -661,7 +671,7 @@ impl<T> Vec<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(drain)]
+    /// #![feature(drain)]
     ///
     /// // Draining using `..` clears the whole vector.
     /// let mut v = vec![1, 2, 3];
@@ -759,7 +769,8 @@ impl<T> Vec<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(map_in_place)]
+    /// #![feature(map_in_place)]
+    ///
     /// let v = vec![0, 1, 2];
     /// let w = v.map_in_place(|i| i + 3);
     /// assert_eq!(&w[..], &[3, 4, 5]);
@@ -772,6 +783,9 @@ impl<T> Vec<T> {
     /// ```
     #[unstable(feature = "map_in_place",
                reason = "API may change to provide stronger guarantees")]
+    #[deprecated(since = "1.3.0",
+                 reason = "unclear that the API is strong enough and did \
+                           not proven itself")]
     pub fn map_in_place<U, F>(self, mut f: F) -> Vec<U> where F: FnMut(T) -> U {
         // FIXME: Assert statically that the types `T` and `U` have the same
         // size.
@@ -962,7 +976,8 @@ impl<T> Vec<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(split_off)]
+    /// #![feature(split_off)]
+    ///
     /// let mut vec = vec![1,2,3];
     /// let vec2 = vec.split_off(1);
     /// assert_eq!(vec, [1]);
@@ -1001,7 +1016,8 @@ impl<T: Clone> Vec<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(vec_resize)]
+    /// #![feature(vec_resize)]
+    ///
     /// let mut vec = vec!["hello"];
     /// vec.resize(3, "world");
     /// assert_eq!(vec, ["hello", "world", "world"]);
@@ -1053,7 +1069,8 @@ impl<T: Clone> Vec<T> {
     /// # Examples
     ///
     /// ```
-    /// # #![feature(vec_push_all)]
+    /// #![feature(vec_push_all)]
+    ///
     /// let mut vec = vec![1];
     /// vec.push_all(&[2, 3, 4]);
     /// assert_eq!(vec, [1, 2, 3, 4]);
@@ -1627,6 +1644,7 @@ impl<T> IntoIter<T> {
     #[inline]
     /// Drops all items that have not yet been moved and returns the empty vector.
     #[unstable(feature = "iter_to_vec")]
+    #[deprecated(since = "1.3.0", reason = "replaced by drain()")]
     pub fn into_inner(mut self) -> Vec<T> {
         unsafe {
             for _x in self.by_ref() { }
