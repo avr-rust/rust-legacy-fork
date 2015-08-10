@@ -154,3 +154,10 @@ $(foreach crate,$(TOOLS),$(eval $(call RUST_TOOL,$(crate))))
 ifdef CFG_DISABLE_ELF_TLS
 RUSTFLAGS_std := --cfg no_elf_tls
 endif
+
+TARGET_CRATES_STAGE0 := $(TARGET_CRATES)
+TARGET_CRATES_STAGE1 := $(TARGET_CRATES)
+# FIXME[avr]: This breaks all non-avr builds.
+# Set this with a conditional based on the target arch.
+# This should be set to $(TARGET_CRATES) for all other targets.
+TARGET_CRATES_STAGE2 := core
