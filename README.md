@@ -9,8 +9,12 @@ It uses the [AVR-LLVM backend](https://github.com/avr-llvm/llvm).
 
 ## Compiling
 
-``` bash
+This will compile Rust with AVR support. This will not create a
+fully-fledged compiler, however - it does not compile any libraries
+such as `libcore` or `liblibc`. To do this, the `--target=avr-atmel-none`
+flag must be passed to `configure`, which is not fully supported yet.
 
+``` bash
 # grab the avr-rust sources
 git clone https://github.com/avr-rust/rust.git
 
@@ -33,6 +37,31 @@ as the computer you are compiling on. In order to get a fully-fledged AVR
 compiler (including `libcore` et al), the `--target=avr-atmel-none` flag must
 be passed to `configure`, however, this does not work currently (but is being
 worked on).
+
+## Building a full cross compiler
+
+**NOTE**: This does not currently work due to a bug.
+
+This process will compile a `rustc` which can target AVR, and also build
+`libcore` which can then be used with AVR programs.
+
+This process is identical to compiling Rust as stated before, although different
+flags must be passed to `configure`.
+
+``` bash
+# grab the avr-rust sources
+git clone https://github.com/avr-rust/rust.git
+
+# create a directory to place built files in
+mkdir build && cd build
+
+# generate makefiles
+../rust/configure --target=avr-atmel-none
+
+# build rust
+make
+```
+
 
 ## Usage
 
