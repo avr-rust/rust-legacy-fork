@@ -941,7 +941,7 @@ fn copy_intrinsic<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
         }
     } else {
         match int_size {
-            16 => "llvm.memcpy.p0i8.p0i8.i16",  
+            16 => "llvm.memcpy.p0i8.p0i8.i16",
             32 => "llvm.memcpy.p0i8.p0i8.i32",
             64 => "llvm.memcpy.p0i8.p0i8.i64",
             _ => unreachable!(),
