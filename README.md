@@ -56,7 +56,7 @@ git clone https://github.com/avr-rust/rust.git
 mkdir build && cd build
 
 # generate makefiles
-../rust/configure --target=avr-atmel-none
+../rust/configure --target=avr-atmel-none --disable-jemalloc
 
 # build rust
 make
