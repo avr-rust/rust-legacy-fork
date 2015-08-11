@@ -767,6 +767,7 @@ impl<'b, 'tcx> CrateContext<'b, 'tcx> {
     /// address space on 64-bit ARMv8 and x86_64.
     pub fn obj_size_bound(&self) -> u64 {
         match &self.sess().target.target.target_pointer_width[..] {
+            "16" => 1 << 15,
             "32" => 1 << 31,
             "64" => 1 << 47,
             _ => unreachable!() // error handled by config::build_target_config
@@ -829,10 +830,13 @@ fn declare_intrinsic(ccx: &CrateContext, key: & &'static str) -> Option<ValueRef
     let t_f32 = Type::f32(ccx);
     let t_f64 = Type::f64(ccx);
 
+    ifn!("llvm.memcpy.p0i8.p0i8.i16", fn(i8p, i8p, t_i16, t_i32, i1) -> void);
     ifn!("llvm.memcpy.p0i8.p0i8.i32", fn(i8p, i8p, t_i32, t_i32, i1) -> void);
     ifn!("llvm.memcpy.p0i8.p0i8.i64", fn(i8p, i8p, t_i64, t_i32, i1) -> void);
+    ifn!("llvm.memmove.p0i8.p0i8.i16", fn(i8p, i8p, t_i16, t_i32, i1) -> void);
     ifn!("llvm.memmove.p0i8.p0i8.i32", fn(i8p, i8p, t_i32, t_i32, i1) -> void);
     ifn!("llvm.memmove.p0i8.p0i8.i64", fn(i8p, i8p, t_i64, t_i32, i1) -> void);
+    ifn!("llvm.memset.p0i8.i16", fn(i8p, t_i8, t_i16, t_i32, i1) -> void);
     ifn!("llvm.memset.p0i8.i32", fn(i8p, t_i8, t_i32, t_i32, i1) -> void);
     ifn!("llvm.memset.p0i8.i64", fn(i8p, t_i8, t_i64, t_i32, i1) -> void);
 

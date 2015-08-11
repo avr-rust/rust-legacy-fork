@@ -1341,7 +1341,9 @@ impl<T> Pointer for *const T {
 
             if let None = f.width {
                 // The formats need two extra bytes, for the 0x
-                if cfg!(target_pointer_width = "32") {
+                if cfg!(target_pointer_width = "16") {
+                    f.width = Some(5);
+                } else if cfg!(target_pointer_width = "32") {
                     f.width = Some(10);
                 } else {
                     f.width = Some(18);

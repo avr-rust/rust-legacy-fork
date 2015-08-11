@@ -177,6 +177,10 @@ pub fn represent_type<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
     repr
 }
 
+macro_rules! repeat_u8_as_u16 {
+    ($name:expr) => { (($name as u16) <<  8 |
+                       ($name as u16)) }
+}
 macro_rules! repeat_u8_as_u32 {
     ($name:expr) => { (($name as u32) << 24 |
                        ($name as u32) << 16 |
@@ -203,11 +207,13 @@ pub const DTOR_NEEDED_HINT: u8 = 0x3d;
 pub const DTOR_MOVED_HINT: u8 = 0x2d;
 
 pub const DTOR_NEEDED: u8 = 0xd4;
+pub const DTOR_NEEDED_U16: u16 = repeat_u8_as_u16!(DTOR_NEEDED);
 pub const DTOR_NEEDED_U32: u32 = repeat_u8_as_u32!(DTOR_NEEDED);
 pub const DTOR_NEEDED_U64: u64 = repeat_u8_as_u64!(DTOR_NEEDED);
 #[allow(dead_code)]
 pub fn dtor_needed_usize(ccx: &CrateContext) -> usize {
     match &ccx.tcx().sess.target.target.target_pointer_width[..] {
+        "16" => DTOR_NEEDED_U16 as usize,
         "32" => DTOR_NEEDED_U32 as usize,
         "64" => DTOR_NEEDED_U64 as usize,
         tws => panic!("Unsupported target word size for int: {}", tws),
@@ -215,11 +221,13 @@ pub fn dtor_needed_usize(ccx: &CrateContext) -> usize {
 }
 
 pub const DTOR_DONE: u8 = 0x1d;
+pub const DTOR_DONE_U16: u16 = repeat_u8_as_u16!(DTOR_DONE);
 pub const DTOR_DONE_U32: u32 = repeat_u8_as_u32!(DTOR_DONE);
 pub const DTOR_DONE_U64: u64 = repeat_u8_as_u64!(DTOR_DONE);
 #[allow(dead_code)]
 pub fn dtor_done_usize(ccx: &CrateContext) -> usize {
     match &ccx.tcx().sess.target.target.target_pointer_width[..] {
+        "16" => DTOR_DONE_U16 as usize,
         "32" => DTOR_DONE_U32 as usize,
         "64" => DTOR_DONE_U64 as usize,
         tws => panic!("Unsupported target word size for int: {}", tws),

@@ -2725,6 +2725,8 @@ step_impl_unsigned!(u64);
 step_impl_signed!(i64);
 #[cfg(target_pointer_width = "32")]
 step_impl_no_between!(u64 i64);
+#[cfg(target_pointer_width = "16")]
+step_impl_no_between!(u64 i64);
 
 /// An adapter for stepping range iterators by a custom amount.
 ///

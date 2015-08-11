@@ -933,16 +933,18 @@ fn copy_intrinsic<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let size = machine::llsize_of(ccx, lltp_ty);
     let int_size = machine::llbitsize_of_real(ccx, ccx.int_type());
     let name = if allow_overlap {
-        if int_size == 32 {
-            "llvm.memmove.p0i8.p0i8.i32"
-        } else {
-            "llvm.memmove.p0i8.p0i8.i64"
+        match int_size {
+            16 => "llvm.memmove.p0i8.p0i8.i16",
+            32 => "llvm.memmove.p0i8.p0i8.i32",
+            64 => "llvm.memmove.p0i8.p0i8.i64",
+            _ => unreachable!(),
         }
     } else {
-        if int_size == 32 {
-            "llvm.memcpy.p0i8.p0i8.i32"
-        } else {
-            "llvm.memcpy.p0i8.p0i8.i64"
+        match int_size {
+            16 => "llvm.memcpy.p0i8.p0i8.i16",  
+            32 => "llvm.memcpy.p0i8.p0i8.i32",
+            64 => "llvm.memcpy.p0i8.p0i8.i64",
+            _ => unreachable!(),
         }
     };
 
@@ -973,10 +975,11 @@ fn memset_intrinsic<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
     let lltp_ty = type_of::type_of(ccx, tp_ty);
     let align = C_i32(ccx, type_of::align_of(ccx, tp_ty) as i32);
     let size = machine::llsize_of(ccx, lltp_ty);
-    let name = if machine::llbitsize_of_real(ccx, ccx.int_type()) == 32 {
-        "llvm.memset.p0i8.i32"
-    } else {
-        "llvm.memset.p0i8.i64"
+    let name = match machine::llbitsize_of_real(ccx, ccx.int_type()) {
+        16 => "llvm.memset.p0i8.i16",
+        32 => "llvm.memset.p0i8.i32",
+        64 => "llvm.memset.p0i8.i64",
+        _ => unreachable!(),
     };
 
     let dst_ptr = PointerCast(bcx, dst, Type::i8p(ccx));

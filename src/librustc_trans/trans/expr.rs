@@ -2312,11 +2312,13 @@ impl OverflowOpViaIntrinsic {
 
         let new_sty = match ty.sty {
             TyInt(TyIs) => match &tcx.sess.target.target.target_pointer_width[..] {
+                "16" => TyInt(TyI16),
                 "32" => TyInt(TyI32),
                 "64" => TyInt(TyI64),
                 _ => panic!("unsupported target word size")
             },
             TyUint(TyUs) => match &tcx.sess.target.target.target_pointer_width[..] {
+                "16" => TyUint(TyU16),
                 "32" => TyUint(TyU32),
                 "64" => TyUint(TyU64),
                 _ => panic!("unsupported target word size")

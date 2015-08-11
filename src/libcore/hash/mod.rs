@@ -136,7 +136,9 @@ pub trait Hasher {
     #[inline]
     #[stable(feature = "hasher_write", since = "1.3.0")]
     fn write_usize(&mut self, i: usize) {
-        if cfg!(target_pointer_width = "32") {
+        if cfg!(target_pointer_width = "16") {
+            self.write_u16(i as u16);
+        } else if cfg!(target_pointer_width = "32") {
             self.write_u32(i as u32)
         } else {
             self.write_u64(i as u64)
