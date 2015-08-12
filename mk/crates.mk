@@ -155,9 +155,16 @@ ifdef CFG_DISABLE_ELF_TLS
 RUSTFLAGS_std := --cfg no_elf_tls
 endif
 
-TARGET_CRATES_STAGE0 := $(TARGET_CRATES)
-TARGET_CRATES_STAGE1 := $(TARGET_CRATES)
-# FIXME[avr]: This breaks all non-avr builds.
-# Set this with a conditional based on the target arch.
-# This should be set to $(TARGET_CRATES) for all other targets.
-TARGET_CRATES_STAGE2 := core
+# Create variables TARGET_CRATES_<host>
+# containing what crates need to be build for this
+# target.
+define DEF_TARGET_CRATES
+ifeq (avr-atmel-none,$1)
+TARGET_CRATES_$(1) := core
+else
+TARGET_CRATES_$(1) := $(TARGET_CRATES)
+endif
+endef
+
+$(foreach t,$(CFG_TARGET),$(eval $(call DEF_TARGET_CRATES,$(t))))
+
