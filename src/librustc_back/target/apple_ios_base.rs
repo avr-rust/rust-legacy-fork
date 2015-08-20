@@ -77,8 +77,8 @@ fn target_cpu(arch: Arch) -> String {
         Armv7 => "cortex-a8", // iOS7 is supported on iPhone 4 and higher
         Armv7s => "cortex-a9",
         Arm64 => "cyclone",
-        I386 => "generic",
-        X86_64 => "x86-64",
+        I386 => "yonah",
+        X86_64 => "core2",
     }.to_string()
 }
 
@@ -87,14 +87,6 @@ pub fn opts(arch: Arch) -> TargetOptions {
         cpu: target_cpu(arch),
         dynamic_linking: false,
         executables: true,
-        // Although there is an experimental implementation of LLVM which
-        // supports SS on armv7 it wasn't approved by Apple, see:
-        // http://lists.cs.uiuc.edu/pipermail/llvm-commits/Week-of-Mon-20140505/216350.html
-        // It looks like it might be never accepted to upstream LLVM.
-        //
-        // SS might be also enabled on Arm64 as it has builtin support in LLVM
-        // but I haven't tested it through yet
-        morestack: false,
         pre_link_args: pre_link_args(arch),
         .. super::apple_base::opts()
     }

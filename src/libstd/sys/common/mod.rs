@@ -10,9 +10,6 @@
 
 #![allow(missing_docs)]
 
-#[cfg(stage0)]
-use prelude::v1::*;
-
 pub mod backtrace;
 pub mod condvar;
 pub mod mutex;
@@ -21,7 +18,6 @@ pub mod io;
 pub mod poison;
 pub mod remutex;
 pub mod rwlock;
-pub mod stack;
 pub mod thread;
 pub mod thread_info;
 pub mod thread_local;

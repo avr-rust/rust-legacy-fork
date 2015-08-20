@@ -19,12 +19,12 @@ pub fn opts() -> TargetOptions {
         dynamic_linking: true,
         executables: true,
         is_like_osx: true,
-        morestack: true,
         has_rpath: true,
         dll_prefix: "lib".to_string(),
         dll_suffix: ".dylib".to_string(),
         archive_format: "bsd".to_string(),
         pre_link_args: Vec::new(),
+        exe_allocation_crate: super::best_allocator(),
         .. Default::default()
     }
 }

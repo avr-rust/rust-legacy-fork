@@ -61,14 +61,16 @@
 #![crate_name = "alloc"]
 #![crate_type = "rlib"]
 #![staged_api]
+#![allow(unused_attributes)]
 #![unstable(feature = "alloc",
             reason = "this library is unlikely to be stabilized in its current \
                       form or name")]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/nightly/",
+       html_root_url = "https://doc.rust-lang.org/nightly/",
        test(no_crate_inject))]
 #![no_std]
+#![cfg_attr(not(stage0), needs_allocator)]
 
 #![feature(allocator)]
 #![feature(box_syntax)]
@@ -92,16 +94,13 @@
 #![feature(unsize)]
 #![feature(core_slice_ext)]
 #![feature(core_str_ext)]
-#![cfg_attr(stage0, feature(core, core_prelude))]
+#![cfg_attr(stage0, feature(alloc_system))]
+#![cfg_attr(not(stage0), feature(needs_allocator))]
 
-#![cfg_attr(test, feature(test, alloc, rustc_private, box_raw))]
-#![cfg_attr(all(not(feature = "external_funcs"), not(feature = "external_crate")),
-            feature(libc))]
+#![cfg_attr(test, feature(test, rustc_private, box_raw))]
 
-#[cfg(all(not(feature = "external_funcs"), not(feature = "external_crate")))]
-extern crate libc;
-
-#[cfg(stage0)] #[macro_use] extern crate core;
+#[cfg(stage0)]
+extern crate alloc_system;
 
 // Allow testing this library
 

@@ -8,9 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[cfg(stage0)]
-use prelude::v1::*;
-
 use cell::UnsafeCell;
 use libc;
 use ptr;
@@ -61,11 +58,11 @@ impl Condvar {
         let r = ffi::gettimeofday(&mut sys_now, ptr::null_mut());
         debug_assert_eq!(r, 0);
 
-        let nsec = dur.extra_nanos() as libc::c_long +
+        let nsec = dur.subsec_nanos() as libc::c_long +
                    (sys_now.tv_usec * 1000) as libc::c_long;
         let extra = (nsec / 1_000_000_000) as libc::time_t;
         let nsec = nsec % 1_000_000_000;
-        let seconds = dur.secs() as libc::time_t;
+        let seconds = dur.as_secs() as libc::time_t;
 
         let timeout = sys_now.tv_sec.checked_add(extra).and_then(|s| {
             s.checked_add(seconds)

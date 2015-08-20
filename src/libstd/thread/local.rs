@@ -12,9 +12,6 @@
 
 #![unstable(feature = "thread_local_internals")]
 
-#[cfg(stage0)]
-use prelude::v1::*;
-
 use cell::UnsafeCell;
 
 // Sure wish we had macro hygiene, no?
@@ -63,7 +60,7 @@ pub use self::imp::Key as __KeyInner;
 /// });
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct LocalKey<T> {
+pub struct LocalKey<T:'static> {
     // The key itself may be tagged with #[thread_local], and this `Key` is
     // stored as a `static`, and it's not valid for a static to reference the
     // address of another thread_local static. For this reason we kinda wonkily
@@ -272,9 +269,6 @@ impl<T: 'static> LocalKey<T> {
           not(no_elf_tls)))]
 #[doc(hidden)]
 mod imp {
-    #[cfg(stage0)]
-    use prelude::v1::*;
-
     use cell::{Cell, UnsafeCell};
     use intrinsics;
     use ptr;

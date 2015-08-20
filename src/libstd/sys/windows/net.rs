@@ -8,9 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[cfg(stage0)]
-use prelude::v1::*;
-
 use io;
 use libc::consts::os::extra::INVALID_SOCKET;
 use libc::{self, c_int, c_void};
@@ -70,7 +67,6 @@ pub fn cvt_gai(err: c_int) -> io::Result<()> {
 }
 
 /// Provides the functionality of `cvt` for a closure.
-#[allow(deprecated)]
 pub fn cvt_r<T, F>(mut f: F) -> io::Result<T>
     where F: FnMut() -> T, T: One + Neg<Output=T> + PartialEq
 {

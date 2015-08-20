@@ -75,6 +75,90 @@ To fix this, ensure that any declared variables are initialized before being
 used.
 "##,
 
+E0382: r##"
+This error occurs when an attempt is made to use a variable after its contents
+have been moved elsewhere. For example:
+
+```
+struct MyStruct { s: u32 }
+
+fn main() {
+    let mut x = MyStruct{ s: 5u32 };
+    let y = x;
+    x.s = 6;
+    println!("{}", x.s);
+}
+```
+
+Since `MyStruct` is a type that is not marked `Copy`, the data gets moved out
+of `x` when we set `y`. This is fundamental to Rust's ownership system: outside
+of workarounds like `Rc`, a value cannot be owned by more than one variable.
+
+If we own the type, the easiest way to address this problem is to implement
+`Copy` and `Clone` on it, as shown below. This allows `y` to copy the
+information in `x`, while leaving the original version owned by `x`. Subsequent
+changes to `x` will not be reflected when accessing `y`.
+
+```
+#[derive(Copy, Clone)]
+struct MyStruct { s: u32 }
+
+fn main() {
+    let mut x = MyStruct{ s: 5u32 };
+    let y = x;
+    x.s = 6;
+    println!("{}", x.s);
+}
+```
+
+Alternatively, if we don't control the struct's definition, or mutable shared
+ownership is truly required, we can use `Rc` and `RefCell`:
+
+```
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct MyStruct { s: u32 }
+
+fn main() {
+    let mut x = Rc::new(RefCell::new(MyStruct{ s: 5u32 }));
+    let y = x.clone();
+    x.borrow_mut().s = 6;
+    println!("{}", x.borrow.s);
+}
+```
+
+With this approach, x and y share ownership of the data via the `Rc` (reference
+count type). `RefCell` essentially performs runtime borrow checking: ensuring
+that at most one writer or multiple readers can access the data at any one time.
+
+If you wish to learn more about ownership in Rust, start with the chapter in the
+Book:
+
+https://doc.rust-lang.org/book/ownership.html
+"##,
+
+E0383: r##"
+This error occurs when an attempt is made to partially reinitialize a
+structure that is currently uninitialized.
+
+For example, this can happen when a drop has taken place:
+
+```
+let mut x = Foo { a: 1 };
+drop(x); // `x` is now uninitialized
+x.a = 2; // error, partial reinitialization of uninitialized structure `t`
+```
+
+This error can be fixed by fully reinitializing the structure in question:
+
+```
+let mut x = Foo { a: 1 };
+drop(x);
+x = Foo { a: 2 };
+```
+"##,
+
 E0384: r##"
 This error occurs when an attempt is made to reassign an immutable variable.
 For example:
@@ -95,16 +179,96 @@ fn main(){
     x = 5;
 }
 ```
+"##,
+
+E0386: r##"
+This error occurs when an attempt is made to mutate the target of a mutable
+reference stored inside an immutable container.
+
+For example, this can happen when storing a `&mut` inside an immutable `Box`:
+
+```
+let mut x: i64 = 1;
+let y: Box<_> = Box::new(&mut x);
+**y = 2; // error, cannot assign to data in an immutable container
+```
+
+This error can be fixed by making the container mutable:
+
+```
+let mut x: i64 = 1;
+let mut y: Box<_> = Box::new(&mut x);
+**y = 2;
+```
+
+It can also be fixed by using a type with interior mutability, such as `Cell` or
+`RefCell`:
+
+```
+let x: i64 = 1;
+let y: Box<Cell<_>> = Box::new(Cell::new(x));
+y.set(2);
+```
+"##,
+
+E0387: r##"
+This error occurs when an attempt is made to mutate or mutably reference data
+that a closure has captured immutably. Examples of this error are shown below:
+
+```
+// Accepts a function or a closure that captures its environment immutably.
+// Closures passed to foo will not be able to mutate their closed-over state.
+fn foo<F: Fn()>(f: F) { }
+
+// Attempts to mutate closed-over data.  Error message reads:
+// `cannot assign to data in a captured outer variable...`
+fn mutable() {
+    let mut x = 0u32;
+    foo(|| x = 2);
+}
+
+// Attempts to take a mutable reference to closed-over data.  Error message
+// reads: `cannot borrow data mutably in a captured outer variable...`
+fn mut_addr() {
+    let mut x = 0u32;
+    foo(|| { let y = &mut x; });
+}
+```
+
+The problem here is that foo is defined as accepting a parameter of type `Fn`.
+Closures passed into foo will thus be inferred to be of type `Fn`, meaning that
+they capture their context immutably.
+
+If the definition of `foo` is under your control, the simplest solution is to
+capture the data mutably. This can be done by defining `foo` to take FnMut
+rather than Fn:
+
+```
+fn foo<F: FnMut()>(f: F) { }
+```
+
+Alternatively, we can consider using the `Cell` and `RefCell` types to achieve
+interior mutability through a shared reference. Our example's `mutable` function
+could be redefined as below:
+
+```
+use std::cell::Cell;
+
+fn mutable() {
+    let x = Cell::new(0u32);
+    foo(|| x.set(2));
+}
+```
+
+You can read more about cell types in the API documentation:
+
+https://doc.rust-lang.org/std/cell/
 "##
 
 }
 
 register_diagnostics! {
-    E0382, // use of partially/collaterally moved value
-    E0383, // partial reinitialization of uninitialized structure
     E0385, // {} in an aliasable location
-    E0386, // {} in an immutable container
-    E0387, // {} in a captured outer variable in an `Fn` closure
     E0388, // {} in a static location
     E0389  // {} in a `&` reference
 }

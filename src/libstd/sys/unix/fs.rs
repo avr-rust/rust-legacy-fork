@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[cfg(stage0)]
-use core::prelude::v1::*;
 use io::prelude::*;
 use os::unix::prelude::*;
 
@@ -511,13 +509,6 @@ pub fn lstat(p: &Path) -> io::Result<FileAttr> {
     Ok(FileAttr { stat: stat })
 }
 
-pub fn utimes(p: &Path, atime: u64, mtime: u64) -> io::Result<()> {
-    let p = try!(cstr(p));
-    let buf = [super::ms_to_timeval(atime), super::ms_to_timeval(mtime)];
-    try!(cvt(unsafe { c::utimes(p.as_ptr(), buf.as_ptr()) }));
-    Ok(())
-}
-
 pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
     let path = try!(CString::new(p.as_os_str().as_bytes()));
     let mut buf = vec![0u8; 16 * 1024];
@@ -536,7 +527,7 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
     use fs::{File, PathExt, set_permissions};
     if !from.is_file() {
         return Err(Error::new(ErrorKind::InvalidInput,
-                              "the source path is not an existing file"))
+                              "the source path is not an existing regular file"))
     }
 
     let mut reader = try!(File::open(from));

@@ -15,13 +15,12 @@
 #![cfg_attr(not(feature = "cargo-build"), unstable(feature = "libc",
                                                    reason = "use `libc` from crates.io"))]
 #![cfg_attr(not(feature = "cargo-build"), feature(staged_api, no_std))]
-#![cfg_attr(all(not(feature = "cargo-build"), stage0), feature(core))]
 #![cfg_attr(not(feature = "cargo-build"), staged_api)]
 #![cfg_attr(not(feature = "cargo-build"), no_std)]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/nightly/",
-       html_playground_url = "http://play.rust-lang.org/")]
+       html_root_url = "https://doc.rust-lang.org/nightly/",
+       html_playground_url = "https://play.rust-lang.org/")]
 #![cfg_attr(test, feature(test))]
 
 //! Bindings for the C standard library and other platform libraries
@@ -79,7 +78,6 @@
 #![allow(bad_style, raw_pointer_derive)]
 #![cfg_attr(target_os = "nacl", allow(unused_imports))]
 #[cfg(feature = "cargo-build")] extern crate std as core;
-#[cfg(all(stage0, not(feature = "cargo-build")))] extern crate core;
 
 #[cfg(test)] extern crate std;
 #[cfg(test)] extern crate test;
@@ -6265,11 +6263,22 @@ pub mod funcs {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub mod bsd44 {
         use types::common::c95::{c_void};
-        use types::os::arch::c95::{c_uchar, c_int, c_ulong, size_t};
+        use types::os::arch::c95::{c_uchar, c_int, size_t};
+        #[cfg(not(feature = "cargo-build"))]
+        use types::os::arch::c95::c_ulong;
 
         extern {
             #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
             pub fn getdtablesize() -> c_int;
+
+            // Note that the correct signature of ioctl broke some crates on
+            // crates.io, so for now we keep the broken signature for crates.io
+            // but we fix it locally in the main Rust distribution. Once a new
+            // major version of libc is released on crates.io this #[cfg] should
+            // go away.
+            #[cfg(feature = "cargo-build")]
+            pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;
+            #[cfg(not(feature = "cargo-build"))]
             pub fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
             pub fn madvise(addr: *mut c_void, len: size_t, advice: c_int)
                            -> c_int;

@@ -19,7 +19,7 @@ use char::CharExt;
 use cmp::{Eq, PartialOrd};
 use fmt;
 use intrinsics;
-use marker::Copy;
+use marker::{Copy, Sized};
 use mem::size_of;
 use option::Option::{self, Some, None};
 use result::Result::{self, Ok, Err};
@@ -44,6 +44,7 @@ pub struct Wrapping<T>(#[stable(feature = "rust1", since = "1.0.0")] pub T);
 
 pub mod wrapping;
 pub mod flt2dec;
+pub mod dec2flt;
 
 /// Types that have a "zero" value.
 ///
@@ -136,7 +137,6 @@ macro_rules! int_impl {
         /// assert_eq!(u32::from_str_radix("A", 16), Ok(10));
         /// ```
         #[stable(feature = "rust1", since = "1.0.0")]
-        #[allow(deprecated)]
         pub fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> {
             from_str_radix(src, radix)
         }
@@ -700,7 +700,6 @@ macro_rules! uint_impl {
         /// `Err(ParseIntError)` if the string did not represent a valid number.
         /// Otherwise, `Ok(n)` where `n` is the integer represented by `src`.
         #[stable(feature = "rust1", since = "1.0.0")]
-        #[allow(deprecated)]
         pub fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> {
             from_str_radix(src, radix)
         }
@@ -1285,7 +1284,7 @@ pub enum FpCategory {
 #[doc(hidden)]
 #[unstable(feature = "core_float",
            reason = "stable interface is via `impl f{32,64}` in later crates")]
-pub trait Float {
+pub trait Float: Sized {
     /// Returns the NaN value.
     fn nan() -> Self;
     /// Returns the infinite value.
@@ -1385,7 +1384,7 @@ pub trait Float {
 }
 
 macro_rules! from_str_float_impl {
-    ($t:ty) => {
+    ($t:ty, $func:ident) => {
         #[stable(feature = "rust1", since = "1.0.0")]
         impl FromStr for $t {
             type Err = ParseFloatError;
@@ -1416,20 +1415,18 @@ macro_rules! from_str_float_impl {
             /// number.  Otherwise, `Ok(n)` where `n` is the floating-point
             /// number represented by `src`.
             #[inline]
-            #[allow(deprecated)]
             fn from_str(src: &str) -> Result<Self, ParseFloatError> {
-                Self::from_str_radix(src, 10)
+                dec2flt::$func(src)
             }
         }
     }
 }
-from_str_float_impl!(f32);
-from_str_float_impl!(f64);
+from_str_float_impl!(f32, to_f32);
+from_str_float_impl!(f64, to_f64);
 
 macro_rules! from_str_radix_int_impl {
     ($($t:ty)*) => {$(
         #[stable(feature = "rust1", since = "1.0.0")]
-        #[allow(deprecated)]
         impl FromStr for $t {
             type Err = ParseIntError;
             fn from_str(src: &str) -> Result<Self, ParseIntError> {

@@ -162,10 +162,10 @@ fn dur2timeout(dur: Duration) -> libc::DWORD {
     // * Nanosecond precision is rounded up
     // * Greater than u32::MAX milliseconds (50 days) is rounded up to INFINITE
     //   (never time out).
-    dur.secs().checked_mul(1000).and_then(|ms| {
-        ms.checked_add((dur.extra_nanos() as u64) / 1_000_000)
+    dur.as_secs().checked_mul(1000).and_then(|ms| {
+        ms.checked_add((dur.subsec_nanos() as u64) / 1_000_000)
     }).and_then(|ms| {
-        ms.checked_add(if dur.extra_nanos() % 1_000_000 > 0 {1} else {0})
+        ms.checked_add(if dur.subsec_nanos() % 1_000_000 > 0 {1} else {0})
     }).map(|ms| {
         if ms > <libc::DWORD>::max_value() as u64 {
             libc::INFINITE
@@ -173,14 +173,4 @@ fn dur2timeout(dur: Duration) -> libc::DWORD {
             ms as libc::DWORD
         }
     }).unwrap_or(libc::INFINITE)
-}
-
-fn ms_to_filetime(ms: u64) -> libc::FILETIME {
-    // A FILETIME is a count of 100 nanosecond intervals, so we multiply by
-    // 10000 b/c there are 10000 intervals in 1 ms
-    let ms = ms * 10000;
-    libc::FILETIME {
-        dwLowDateTime: ms as u32,
-        dwHighDateTime: (ms >> 32) as u32,
-    }
 }

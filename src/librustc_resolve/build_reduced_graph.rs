@@ -341,10 +341,10 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                         }
 
                         for source_item in source_items {
-                            let (module_path, name) = match source_item.node {
-                                PathListIdent { name, .. } =>
-                                    (module_path.clone(), name.name),
-                                PathListMod { .. } => {
+                            let (module_path, name, rename) = match source_item.node {
+                                PathListIdent { name, rename, .. } =>
+                                    (module_path.clone(), name.name, rename.unwrap_or(name).name),
+                                PathListMod { rename, .. } => {
                                     let name = match module_path.last() {
                                         Some(name) => *name,
                                         None => {
@@ -358,13 +358,14 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                                         }
                                     };
                                     let module_path = module_path.split_last().unwrap().1;
-                                    (module_path.to_vec(), name)
+                                    let rename = rename.map(|n| n.name).unwrap_or(name);
+                                    (module_path.to_vec(), name, rename)
                                 }
                             };
                             self.build_import_directive(
                                 &**parent,
                                 module_path,
-                                SingleImport(name, name),
+                                SingleImport(rename, name),
                                 source_item.span,
                                 source_item.node.id(),
                                 is_public,
@@ -784,6 +785,11 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
               debug!("(building reduced graph for external \
                       crate) building type {}", final_ident);
 
+              let modifiers = match new_parent.kind.get() {
+                  NormalModuleKind => modifiers,
+                  _ => modifiers & !DefModifiers::IMPORTABLE
+              };
+
               child_name_bindings.define_type(def, DUMMY_SP, modifiers);
           }
           DefStruct(def_id) => {
@@ -924,6 +930,11 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                                                                is_public,
                                                                shadowable));
         self.unresolved_imports += 1;
+
+        if is_public {
+            module_.inc_pub_count();
+        }
+
         // Bump the reference count on the name. Or, if this is a glob, set
         // the appropriate flag.
 
@@ -956,7 +967,10 @@ impl<'a, 'b:'a, 'tcx:'b> GraphBuilder<'a, 'b, 'tcx> {
                 // Set the glob flag. This tells us that we don't know the
                 // module's exports ahead of time.
 
-                module_.glob_count.set(module_.glob_count.get() + 1);
+                module_.inc_glob_count();
+                if is_public {
+                    module_.inc_pub_glob_count();
+                }
             }
         }
     }

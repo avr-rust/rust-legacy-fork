@@ -119,9 +119,6 @@ pub struct TargetOptions {
     /// Whether executables are available on this target. iOS, for example, only allows static
     /// libraries. Defaults to false.
     pub executables: bool,
-    /// Whether LLVM's segmented stack prelude is supported by whatever runtime is available.
-    /// Will emit stack checks and calls to __morestack. Defaults to false.
-    pub morestack: bool,
     /// Relocation model to use in object file. Corresponds to `llc
     /// -relocation-model=$relocation_model`. Defaults to "pic".
     pub relocation_model: String,
@@ -177,6 +174,10 @@ pub struct TargetOptions {
     /// defined in libgcc.  If this option is enabled, the target must provide
     /// `eh_unwind_resume` lang item.
     pub custom_unwind_resume: bool,
+
+    /// Default crate for allocation symbols to link against
+    pub lib_allocation_crate: String,
+    pub exe_allocation_crate: String,
 }
 
 impl Default for TargetOptions {
@@ -193,7 +194,6 @@ impl Default for TargetOptions {
             features: "".to_string(),
             dynamic_linking: false,
             executables: false,
-            morestack: false,
             relocation_model: "pic".to_string(),
             code_model: "default".to_string(),
             disable_redzone: false,
@@ -216,6 +216,8 @@ impl Default for TargetOptions {
             post_link_objects: Vec::new(),
             archive_format: String::new(),
             custom_unwind_resume: false,
+            lib_allocation_crate: "alloc_system".to_string(),
+            exe_allocation_crate: "alloc_system".to_string(),
         }
     }
 }
@@ -299,7 +301,6 @@ impl Target {
         key!(data_layout);
         key!(dynamic_linking, bool);
         key!(executables, bool);
-        key!(morestack, bool);
         key!(disable_redzone, bool);
         key!(eliminate_frame_pointer, bool);
         key!(function_sections, bool);
@@ -429,5 +430,13 @@ impl Target {
         }
 
         Err(format!("Could not find specification for target {:?}", target))
+    }
+}
+
+fn best_allocator() -> String {
+    if cfg!(disable_jemalloc) {
+        "alloc_system".to_string()
+    } else {
+        "alloc_jemalloc".to_string()
     }
 }

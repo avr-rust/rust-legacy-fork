@@ -10,7 +10,6 @@
 
 mod sip;
 
-use std::mem;
 use std::hash::{Hash, Hasher};
 use std::default::Default;
 
@@ -37,7 +36,9 @@ impl Hasher for MyHasher {
 #[test]
 fn test_writer_hasher() {
     fn hash<T: Hash>(t: &T) -> u64 {
-        ::std::hash::hash::<_, MyHasher>(t)
+        let mut s = MyHasher { hash: 0 };
+        t.hash(&mut s);
+        s.finish()
     }
 
     assert_eq!(hash(&()), 0);
@@ -72,15 +73,11 @@ fn test_writer_hasher() {
 
     // FIXME (#18248) Add tests for hashing Rc<str> and Rc<[T]>
 
-    unsafe {
-        let ptr: *const i32 = mem::transmute(5_usize);
-        assert_eq!(hash(&ptr), 5);
-    }
+    let ptr = 5_usize as *const i32;
+    assert_eq!(hash(&ptr), 5);
 
-    unsafe {
-        let ptr: *mut i32 = mem::transmute(5_usize);
-        assert_eq!(hash(&ptr), 5);
-    }
+    let ptr = 5_usize as *mut i32;
+    assert_eq!(hash(&ptr), 5);
 }
 
 struct Custom { hash: u64 }
@@ -107,7 +104,9 @@ impl Hash for Custom {
 #[test]
 fn test_custom_state() {
     fn hash<T: Hash>(t: &T) -> u64 {
-        ::std::hash::hash::<_, CustomHasher>(t)
+        let mut c = CustomHasher { output: 0 };
+        t.hash(&mut c);
+        c.finish()
     }
 
     assert_eq!(hash(&Custom { hash: 5 }), 5);

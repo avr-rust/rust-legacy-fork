@@ -163,10 +163,10 @@
 #![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/nightly/",
-       html_playground_url = "http://play.rust-lang.org/")]
+       html_root_url = "https://doc.rust-lang.org/nightly/",
+       html_playground_url = "https://play.rust-lang.org/")]
 #![deny(missing_docs)]
 
 #![feature(box_raw)]
@@ -294,7 +294,7 @@ pub fn log(level: u32, loc: &'static LogLocation, args: fmt::Arguments) {
             1 => panic!("cannot log after main thread has exited"),
             n => {
                 let filter = mem::transmute::<_, &String>(n);
-                if !args.to_string().contains(&filter[..]) {
+                if !args.to_string().contains(filter) {
                     return
                 }
             }

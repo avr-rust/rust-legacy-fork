@@ -83,14 +83,11 @@
 /// to symbols. This is a bit of a hokey implementation as-is, but it works for
 /// all unix platforms we support right now, so it at least gets the job done.
 
-#[cfg(stage0)]
-use prelude::v1::*;
 use io::prelude::*;
 
 use ffi::CStr;
 use io;
 use libc;
-use mem;
 use str;
 use sync::StaticMutex;
 
@@ -108,6 +105,8 @@ use sys_common::backtrace::*;
 #[cfg(all(target_os = "ios", target_arch = "arm"))]
 #[inline(never)]
 pub fn write(w: &mut Write) -> io::Result<()> {
+    use mem;
+
     extern {
         fn backtrace(buf: *mut *mut libc::c_void,
                      sz: libc::c_int) -> libc::c_int;
@@ -122,7 +121,7 @@ pub fn write(w: &mut Write) -> io::Result<()> {
     try!(writeln!(w, "stack backtrace:"));
     // 100 lines should be enough
     const SIZE: usize = 100;
-    let mut buf: [*mut libc::c_void; SIZE] = unsafe {mem::zeroed()};
+    let mut buf: [*mut libc::c_void; SIZE] = unsafe { mem::zeroed() };
     let cnt = unsafe { backtrace(buf.as_mut_ptr(), SIZE as libc::c_int) as usize};
 
     // skipping the first one as it is write itself
@@ -168,7 +167,7 @@ pub fn write(w: &mut Write) -> io::Result<()> {
 
     extern fn trace_fn(ctx: *mut uw::_Unwind_Context,
                        arg: *mut libc::c_void) -> uw::_Unwind_Reason_Code {
-        let cx: &mut Context = unsafe { mem::transmute(arg) };
+        let cx: &mut Context = unsafe { &mut *(arg as *mut Context) };
         let mut ip_before_insn = 0;
         let mut ip = unsafe {
             uw::_Unwind_GetIPInfo(ctx, &mut ip_before_insn) as *mut libc::c_void

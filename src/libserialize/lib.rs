@@ -22,10 +22,10 @@ Core encoding and decoding interfaces.
 #![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/nightly/",
-       html_playground_url = "http://play.rust-lang.org/")]
+       html_root_url = "https://doc.rust-lang.org/nightly/",
+       html_playground_url = "https://play.rust-lang.org/")]
 
 #![feature(box_syntax)]
 #![feature(collections)]
@@ -36,7 +36,6 @@ Core encoding and decoding interfaces.
 #![feature(staged_api)]
 #![feature(str_char)]
 #![feature(unicode)]
-#![feature(vecmap)]
 #![cfg_attr(test, feature(test))]
 
 // test harness access

@@ -21,7 +21,6 @@ use fmt;
 use io;
 use libc::types::os::arch::extra::LPWCH;
 use libc::{self, c_int, c_void};
-use mem;
 use ops::Range;
 use os::windows::ffi::EncodeWide;
 use path::{self, PathBuf};
@@ -84,9 +83,13 @@ pub fn error_string(errnum: i32) -> String {
         }
 
         let b = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        let msg = String::from_utf16(&buf[..b]);
-        match msg {
-            Ok(msg) => msg,
+        match String::from_utf16(&buf[..b]) {
+            Ok(mut msg) => {
+                // Trim trailing CRLF inserted by FormatMessageW
+                let len = msg.trim_right().len();
+                msg.truncate(len);
+                msg
+            },
             Err(..) => format!("OS Error {} (FormatMessageW() returned \
                                 invalid UTF-16)", errnum),
         }
@@ -327,14 +330,6 @@ pub fn args() -> Args {
         // but in that case nArgs is 0 so we won't actually
         // try to read a null pointer
         Args { cur: szArgList, range: 0..(nArgs as isize) }
-    }
-}
-
-pub fn page_size() -> usize {
-    unsafe {
-        let mut info = mem::zeroed();
-        libc::GetSystemInfo(&mut info);
-        return info.dwPageSize as usize;
     }
 }
 

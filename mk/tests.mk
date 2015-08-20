@@ -22,7 +22,8 @@ $(eval $(call RUST_CRATE,coretest))
 DEPS_collectionstest :=
 $(eval $(call RUST_CRATE,collectionstest))
 
-TEST_TARGET_CRATES = $(filter-out core rustc_unicode,$(TARGET_CRATES)) \
+TEST_TARGET_CRATES = $(filter-out core rustc_unicode alloc_system \
+		     		  alloc_jemalloc,$(TARGET_CRATES)) \
 			collectionstest coretest
 TEST_DOC_CRATES = $(DOC_CRATES)
 TEST_HOST_CRATES = $(filter-out rustc_typeck rustc_borrowck rustc_resolve \
@@ -95,7 +96,8 @@ ifdef CFG_WINDOWSY_$(1)
                $$(if $$(findstring stage3,$$(1)), \
                     stage3/$$(CFG_LIBDIR_RELATIVE), \
                )))))/rustlib/$$(CFG_BUILD)/lib
-  CFG_RUN_TEST_$(1)=$$(call CFG_RUN_$(1),$$(call CFG_TESTLIB_$(1),$$(1),$$(4)),$$(1))
+  CFG_RUN_TEST_$(1)=$$(TARGET_RPATH_VAR$$(2)_T_$$(3)_H_$$(4)) \
+	  $$(call CFG_RUN_$(1),$$(call CFG_TESTLIB_$(1),$$(1),$$(4)),$$(1))
 endif
 
 # Run the compiletest runner itself under valgrind
@@ -267,9 +269,10 @@ tidy-basic:
 .PHONY: tidy-binaries
 tidy-binaries:
 		@$(call E, check: binaries)
-		$(Q)find $(S)src -type f -perm +a+x \
+		$(Q)find $(S)src -type f \
+		    \( -perm -u+x -or -perm -g+x -or -perm -o+x \) \
 		    -not -name '*.rs' -and -not -name '*.py' \
-		    -and -not -name '*.sh' \
+		    -and -not -name '*.sh' -and -not -name '*.pp' \
 		| grep '^$(S)src/jemalloc' -v \
 		| grep '^$(S)src/libuv' -v \
 		| grep '^$(S)src/llvm' -v \
@@ -594,6 +597,10 @@ endif
 ifeq ($(findstring android, $(CFG_TARGET)), android)
 CTEST_DISABLE_debuginfo-gdb =
 CTEST_DISABLE_debuginfo-lldb = "lldb tests are disabled on android"
+endif
+
+ifeq ($(findstring msvc,$(CFG_TARGET)),msvc)
+CTEST_DISABLE_debuginfo-gdb = "gdb tests are disabled on MSVC"
 endif
 
 # CTEST_DISABLE_NONSELFHOST_$(TEST_GROUP), if set, will cause that
@@ -1049,7 +1056,8 @@ $(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok: \
         $$(MAKE) \
 	    $$(HBIN$(1)_H_$(3))/rustc$$(X_$(3)) \
 	    $(3)/test/run-make/$$* \
-	    "$$(CC_$(3)) $$(CFG_GCCISH_CFLAGS_$(3))" \
+	    $$(CC_$(3)) \
+	    "$$(CFG_GCCISH_CFLAGS_$(3))" \
 	    $$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3)) \
 	    "$$(TESTNAME)" \
 	    $$(LD_LIBRARY_PATH_ENV_NAME$(1)_T_$(2)_H_$(3)) \

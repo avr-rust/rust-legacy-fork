@@ -30,13 +30,12 @@
 #![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/nightly/")]
+       html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![feature(asm)]
 #![feature(box_syntax)]
-#![feature(duration)]
 #![feature(duration_span)]
 #![feature(fnbox)]
 #![feature(iter_cmp)]
@@ -1105,7 +1104,7 @@ impl Bencher {
     }
 
     pub fn ns_elapsed(&mut self) -> u64 {
-        self.dur.secs() * 1_000_000_000 + (self.dur.extra_nanos() as u64)
+        self.dur.as_secs() * 1_000_000_000 + (self.dur.subsec_nanos() as u64)
     }
 
     pub fn ns_per_iter(&mut self) -> u64 {

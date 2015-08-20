@@ -23,7 +23,6 @@ use ptr;
 use sys::os;
 use time::Duration;
 
-use sys_common::stack::RED_ZONE;
 use sys_common::thread::*;
 
 pub struct Thread {
@@ -43,8 +42,7 @@ impl Thread {
         let mut attr: libc::pthread_attr_t = mem::zeroed();
         assert_eq!(pthread_attr_init(&mut attr), 0);
 
-        // Reserve room for the red zone, the runtime's stack of last resort.
-        let stack_size = cmp::max(stack, RED_ZONE + min_stack_size(&attr));
+        let stack_size = cmp::max(stack, min_stack_size(&attr));
         match pthread_attr_setstacksize(&mut attr, stack_size as libc::size_t) {
             0 => {}
             n => {
@@ -72,7 +70,6 @@ impl Thread {
             Ok(Thread { id: native })
         };
 
-        #[no_stack_check]
         extern fn thread_start(main: *mut libc::c_void) -> *mut libc::c_void {
             unsafe { start_thread(main); }
             0 as *mut _
@@ -131,8 +128,8 @@ impl Thread {
 
     pub fn sleep(dur: Duration) {
         let mut ts = libc::timespec {
-            tv_sec: dur.secs() as libc::time_t,
-            tv_nsec: dur.extra_nanos() as libc::c_long,
+            tv_sec: dur.as_secs() as libc::time_t,
+            tv_nsec: dur.subsec_nanos() as libc::c_long,
         };
 
         // If we're awoken with a signal then the return value will be -1 and
@@ -166,9 +163,6 @@ impl Drop for Thread {
           not(target_os = "netbsd"),
           not(target_os = "openbsd")))]
 pub mod guard {
-    #[cfg(stage0)]
-    use prelude::v1::*;
-
     pub unsafe fn current() -> Option<usize> { None }
     pub unsafe fn init() -> Option<usize> { None }
 }

@@ -23,7 +23,6 @@ pub fn opts() -> TargetOptions {
         exe_suffix: ".exe".to_string(),
         staticlib_prefix: "".to_string(),
         staticlib_suffix: ".lib".to_string(),
-        morestack: false,
         is_like_windows: true,
         archive_format: "gnu".to_string(),
         pre_link_args: vec!(
@@ -61,6 +60,7 @@ pub fn opts() -> TargetOptions {
             // Always enable DEP (NX bit) when it is available
             "-Wl,--nxcompat".to_string(),
         ),
+        exe_allocation_crate: super::best_allocator(),
 
         .. Default::default()
     }

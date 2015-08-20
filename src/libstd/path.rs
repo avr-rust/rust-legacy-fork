@@ -98,9 +98,6 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-#[cfg(stage0)]
-use core::prelude::v1::*;
-
 use ascii::*;
 use borrow::{Borrow, IntoCow, ToOwned, Cow};
 use cmp;
@@ -135,8 +132,6 @@ use self::platform::{is_sep_byte, is_verbatim_sep, MAIN_SEP_STR, parse_prefix};
 #[cfg(unix)]
 mod platform {
     use super::Prefix;
-    #[cfg(stage0)]
-    use core::prelude::v1::*;
     use ffi::OsStr;
 
     #[inline]
@@ -159,8 +154,6 @@ mod platform {
 
 #[cfg(windows)]
 mod platform {
-    #[cfg(stage0)]
-    use core::prelude::v1::*;
     use ascii::*;
 
     use super::{os_str_as_u8_slice, u8_slice_as_os_str, Prefix};
@@ -409,7 +402,6 @@ fn has_physical_root(s: &[u8], prefix: Option<Prefix>) -> bool {
 }
 
 // basic workhorse for splitting stem and extension
-#[allow(unused_unsafe)] // FIXME
 fn split_file_at_dot(file: &OsStr) -> (Option<&OsStr>, Option<&OsStr>) {
     unsafe {
         if os_str_as_u8_slice(file) == b".." { return (Some(file), None) }
@@ -942,7 +934,7 @@ pub struct PathBuf {
 
 impl PathBuf {
     fn as_mut_vec(&mut self) -> &mut Vec<u8> {
-        unsafe { mem::transmute(self) }
+        unsafe { &mut *(self as *mut PathBuf as *mut Vec<u8>) }
     }
 
     /// Allocates an empty `PathBuf`.
@@ -965,7 +957,7 @@ impl PathBuf {
     ///
     /// * if `path` has a root but no prefix (e.g. `\windows`), it
     ///   replaces everything except for the prefix (if any) of `self`.
-    /// * if `path` has a prefix but no root, it replaces `self.
+    /// * if `path` has a prefix but no root, it replaces `self`.
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn push<P: AsRef<Path>>(&mut self, path: P) {
         let path = path.as_ref();
@@ -1126,7 +1118,7 @@ impl ops::Deref for PathBuf {
     type Target = Path;
 
     fn deref(&self) -> &Path {
-        unsafe { mem::transmute(&self.inner[..]) }
+        Path::new(&self.inner)
     }
 }
 
@@ -1227,11 +1219,11 @@ impl Path {
     // The following (private!) function allows construction of a path from a u8
     // slice, which is only safe when it is known to follow the OsStr encoding.
     unsafe fn from_u8_slice(s: &[u8]) -> &Path {
-        mem::transmute(s)
+        Path::new(u8_slice_as_os_str(s))
     }
     // The following (private!) function reveals the byte encoding used for OsStr.
     fn as_u8_slice(&self) -> &[u8] {
-        unsafe { mem::transmute(self) }
+        os_str_as_u8_slice(&self.inner)
     }
 
     /// Directly wrap a string slice as a `Path` slice.
@@ -1750,8 +1742,6 @@ impl AsRef<Path> for PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(stage0)]
-    use core::prelude::v1::*;
     use string::{ToString, String};
     use vec::Vec;
 

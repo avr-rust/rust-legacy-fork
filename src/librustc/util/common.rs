@@ -32,11 +32,11 @@ pub const FN_OUTPUT_NAME: &'static str = "Output";
 #[derive(Clone, Copy, Debug)]
 pub struct ErrorReported;
 
-pub fn time<T, U, F>(do_it: bool, what: &str, u: U, f: F) -> T where
-    F: FnOnce(U) -> T,
+pub fn time<T, F>(do_it: bool, what: &str, f: F) -> T where
+    F: FnOnce() -> T,
 {
     thread_local!(static DEPTH: Cell<usize> = Cell::new(0));
-    if !do_it { return f(u); }
+    if !do_it { return f(); }
 
     let old = DEPTH.with(|slot| {
         let r = slot.get();
@@ -49,7 +49,7 @@ pub fn time<T, U, F>(do_it: bool, what: &str, u: U, f: F) -> T where
         let ref mut rvp = rv;
 
         Duration::span(move || {
-            *rvp = Some(f(u))
+            *rvp = Some(f())
         })
     };
     let rv = rv.unwrap();
@@ -57,8 +57,8 @@ pub fn time<T, U, F>(do_it: bool, what: &str, u: U, f: F) -> T where
     // Hack up our own formatting for the duration to make it easier for scripts
     // to parse (always use the same number of decimal places and the same unit).
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;
-    let secs = dur.secs() as f64;
-    let secs = secs + dur.extra_nanos() as f64 / NANOS_PER_SEC;
+    let secs = dur.as_secs() as f64;
+    let secs = secs + dur.subsec_nanos() as f64 / NANOS_PER_SEC;
 
     let mem_string = match get_resident() {
         Some(n) => {
@@ -75,24 +75,28 @@ pub fn time<T, U, F>(do_it: bool, what: &str, u: U, f: F) -> T where
     rv
 }
 
-// Memory reporting
-#[cfg(unix)]
-fn get_resident() -> Option<usize> {
-    get_proc_self_statm_field(1)
-}
-
-#[cfg(windows)]
-fn get_resident() -> Option<usize> {
-    get_working_set_size()
-}
-
 // Like std::macros::try!, but for Option<>.
 macro_rules! option_try(
     ($e:expr) => (match $e { Some(e) => e, None => return None })
 );
 
+// Memory reporting
+#[cfg(unix)]
+fn get_resident() -> Option<usize> {
+    use std::fs::File;
+    use std::io::Read;
+
+    let field = 1;
+    let mut f = option_try!(File::open("/proc/self/statm").ok());
+    let mut contents = String::new();
+    option_try!(f.read_to_string(&mut contents).ok());
+    let s = option_try!(contents.split_whitespace().nth(field));
+    let npages = option_try!(s.parse::<usize>().ok());
+    Some(npages * 4096)
+}
+
 #[cfg(windows)]
-fn get_working_set_size() -> Option<usize> {
+fn get_resident() -> Option<usize> {
     use libc::{BOOL, DWORD, HANDLE, SIZE_T, GetCurrentProcess};
     use std::mem;
     #[repr(C)] #[allow(non_snake_case)]
@@ -121,22 +125,6 @@ fn get_working_set_size() -> Option<usize> {
         0 => None,
         _ => Some(pmc.WorkingSetSize as usize),
     }
-}
-
-#[cfg_attr(windows, allow(dead_code))]
-#[allow(deprecated)]
-fn get_proc_self_statm_field(field: usize) -> Option<usize> {
-    use std::fs::File;
-    use std::io::Read;
-
-    assert!(cfg!(unix));
-
-    let mut f = option_try!(File::open("/proc/self/statm").ok());
-    let mut contents = String::new();
-    option_try!(f.read_to_string(&mut contents).ok());
-    let s = option_try!(contents.split_whitespace().nth(field));
-    let npages = option_try!(s.parse::<usize>().ok());
-    Some(npages * ::std::env::page_size())
 }
 
 pub fn indent<R, F>(op: F) -> R where

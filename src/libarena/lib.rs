@@ -26,9 +26,9 @@
 #![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/nightly/")]
+       html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![feature(alloc)]
 #![feature(box_syntax)]
@@ -152,7 +152,7 @@ unsafe fn destroy_chunk(chunk: &Chunk) {
     let fill = chunk.fill.get();
 
     while idx < fill {
-        let tydesc_data: *const usize = mem::transmute(buf.offset(idx as isize));
+        let tydesc_data = buf.offset(idx as isize) as *const usize;
         let (tydesc, is_done) = un_bitpack_tydesc_ptr(*tydesc_data);
         let (size, align) = ((*tydesc).size, (*tydesc).align);
 
@@ -305,7 +305,7 @@ impl<'longer_than_self> Arena<'longer_than_self> {
             let ptr = ptr as *mut T;
             // Write in our tydesc along with a bit indicating that it
             // has *not* been initialized yet.
-            *ty_ptr = mem::transmute(tydesc);
+            *ty_ptr = bitpack_tydesc_ptr(tydesc, false);
             // Actually initialize it
             ptr::write(&mut(*ptr), op());
             // Now that we are done, update the tydesc to indicate that
@@ -443,8 +443,7 @@ impl<T> TypedArenaChunk<T> {
     fn start(&self) -> *const u8 {
         let this: *const TypedArenaChunk<T> = self;
         unsafe {
-            mem::transmute(round_up(this.offset(1) as usize,
-                                    mem::align_of::<T>()))
+            round_up(this.offset(1) as usize, mem::align_of::<T>()) as *const u8
         }
     }
 
@@ -488,7 +487,7 @@ impl<T> TypedArena<T> {
         }
 
         let ptr: &mut T = unsafe {
-            let ptr: &mut T = mem::transmute(self.ptr.clone());
+            let ptr: &mut T = &mut *(self.ptr.get() as *mut T);
             ptr::write(ptr, object);
             self.ptr.set(self.ptr.get().offset(1));
             ptr

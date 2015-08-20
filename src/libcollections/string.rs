@@ -12,9 +12,6 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-#[cfg(stage0)]
-use core::prelude::v1::*;
-
 use core::fmt;
 use core::hash;
 use core::iter::FromIterator;
@@ -83,24 +80,6 @@ impl String {
         String {
             vec: Vec::with_capacity(capacity),
         }
-    }
-
-    /// Creates a new string buffer from the given string.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(collections)]
-    ///
-    /// let s = String::from("hello");
-    /// assert_eq!(&s[..], "hello");
-    /// ```
-    #[inline]
-    #[unstable(feature = "collections", reason = "use `String::from` instead")]
-    #[deprecated(since = "1.2.0", reason = "use `String::from` instead")]
-    #[cfg(not(test))]
-    pub fn from_str(string: &str) -> String {
-        String { vec: <[_]>::to_vec(string.as_bytes()) }
     }
 
     // HACK(japaric): with cfg(test) the inherent `[T]::to_vec` method, which is
@@ -750,9 +729,19 @@ impl String {
     /// Note that this will drop any excess capacity.
     #[unstable(feature = "box_str",
                reason = "recently added, matches RFC")]
-    pub fn into_boxed_slice(self) -> Box<str> {
+    pub fn into_boxed_str(self) -> Box<str> {
         let slice = self.vec.into_boxed_slice();
         unsafe { mem::transmute::<Box<[u8]>, Box<str>>(slice) }
+    }
+
+    /// Converts the string into `Box<str>`.
+    ///
+    /// Note that this will drop any excess capacity.
+    #[unstable(feature = "box_str",
+               reason = "recently added, matches RFC")]
+    #[deprecated(since = "1.4.0", reason = "renamed to `into_boxed_str`")]
+    pub fn into_boxed_slice(self) -> Box<str> {
+        self.into_boxed_str()
     }
 }
 
@@ -977,7 +966,7 @@ impl ops::Index<ops::RangeFull> for String {
 
     #[inline]
     fn index(&self, _index: ops::RangeFull) -> &str {
-        unsafe { mem::transmute(&*self.vec) }
+        unsafe { str::from_utf8_unchecked(&self.vec) }
     }
 }
 
@@ -1016,7 +1005,7 @@ impl ops::Deref for String {
 
     #[inline]
     fn deref(&self) -> &str {
-        unsafe { mem::transmute(&self.vec[..]) }
+        unsafe { str::from_utf8_unchecked(&self.vec) }
     }
 }
 
@@ -1024,7 +1013,7 @@ impl ops::Deref for String {
 impl ops::DerefMut for String {
     #[inline]
     fn deref_mut(&mut self) -> &mut str {
-        unsafe { mem::transmute(&mut self.vec[..]) }
+        unsafe { mem::transmute(&mut *self.vec) }
     }
 }
 

@@ -56,7 +56,7 @@ pub trait Sized {
 /// Types that can be "unsized" to a dynamically sized type.
 #[unstable(feature = "unsize")]
 #[lang="unsize"]
-pub trait Unsize<T> {
+pub trait Unsize<T: ?Sized> {
     // Empty.
 }
 
@@ -217,18 +217,6 @@ unsafe impl Sync for .. { }
 
 impl<T> !Sync for *const T { }
 impl<T> !Sync for *mut T { }
-
-/// A type which is considered "not POD", meaning that it is not
-/// implicitly copyable. This is typically embedded in other types to
-/// ensure that they are never copied, even if they lack a destructor.
-#[unstable(feature = "core",
-           reason = "likely to change with new variance strategy")]
-#[deprecated(since = "1.2.0",
-             reason = "structs are by default not copyable")]
-#[lang = "no_copy_bound"]
-#[allow(deprecated)]
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NoCopy;
 
 macro_rules! impls{
     ($t: ident) => (
@@ -419,7 +407,6 @@ mod impls {
 #[rustc_reflect_like]
 #[unstable(feature = "reflect_marker",
            reason = "requires RFC and more experience")]
-#[allow(deprecated)]
 #[rustc_on_unimplemented = "`{Self}` does not implement `Any`; \
                             ensure all type parameters are bounded by `Any`"]
 pub trait Reflect {}

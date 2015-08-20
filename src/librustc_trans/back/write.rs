@@ -25,7 +25,6 @@ use syntax::diagnostic::{Emitter, Handler, Level};
 
 use std::ffi::{CStr, CString};
 use std::fs;
-use std::mem;
 use std::path::Path;
 use std::ptr;
 use std::str;
@@ -375,8 +374,7 @@ unsafe extern "C" fn report_inline_asm<'a, 'b>(cgcx: &'a CodegenContext<'a>,
 unsafe extern "C" fn inline_asm_handler(diag: SMDiagnosticRef,
                                         user: *const c_void,
                                         cookie: c_uint) {
-    let HandlerFreeVars { cgcx, .. }
-        = *mem::transmute::<_, *const HandlerFreeVars>(user);
+    let HandlerFreeVars { cgcx, .. } = *(user as *const HandlerFreeVars);
 
     let msg = llvm::build_string(|s| llvm::LLVMWriteSMDiagnosticToString(diag, s))
         .expect("non-UTF8 SMDiagnostic");
@@ -385,8 +383,7 @@ unsafe extern "C" fn inline_asm_handler(diag: SMDiagnosticRef,
 }
 
 unsafe extern "C" fn diagnostic_handler(info: DiagnosticInfoRef, user: *mut c_void) {
-    let HandlerFreeVars { llcx, cgcx }
-        = *mem::transmute::<_, *const HandlerFreeVars>(user);
+    let HandlerFreeVars { llcx, cgcx } = *(user as *const HandlerFreeVars);
 
     match llvm::diagnostic::Diagnostic::unpack(info) {
         llvm::diagnostic::InlineAsm(inline) => {
@@ -487,9 +484,9 @@ unsafe fn optimize_and_codegen(cgcx: &CodegenContext,
         cgcx.handler.abort_if_errors();
 
         // Finally, run the actual optimization passes
-        time(config.time_passes, "llvm function passes", (), |()|
+        time(config.time_passes, "llvm function passes", ||
              llvm::LLVMRustRunFunctionPassManager(fpm, llmod));
-        time(config.time_passes, "llvm module passes", (), |()|
+        time(config.time_passes, "llvm module passes", ||
              llvm::LLVMRunPassManager(mpm, llmod));
 
         // Deallocate managers that we're now done with
@@ -498,7 +495,7 @@ unsafe fn optimize_and_codegen(cgcx: &CodegenContext,
 
         match cgcx.lto_ctxt {
             Some((sess, reachable)) if sess.lto() =>  {
-                time(sess.time_passes(), "all lto passes", (), |()|
+                time(sess.time_passes(), "all lto passes", ||
                      lto::run(sess, llmod, tm, reachable, &config));
 
                 if config.emit_lto_bc {
@@ -539,7 +536,7 @@ unsafe fn optimize_and_codegen(cgcx: &CodegenContext,
         llvm::LLVMWriteBitcodeToFile(llmod, out.as_ptr());
     }
 
-    time(config.time_passes, "codegen passes", (), |()| {
+    time(config.time_passes, "codegen passes", || {
         if config.emit_ir {
             let ext = format!("{}.ll", name_extra);
             let out = output_names.with_extension(&ext);

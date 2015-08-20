@@ -395,7 +395,7 @@ impl CStr {
     /// > length calculation whenever this method is called.
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn to_bytes_with_nul(&self) -> &[u8] {
-        unsafe { mem::transmute::<&[libc::c_char], &[u8]>(&self.inner) }
+        unsafe { mem::transmute(&self.inner) }
     }
 
     /// Yields a `&str` slice if the `CStr` contains valid UTF-8.
@@ -468,6 +468,7 @@ mod tests {
     use super::*;
     use libc;
     use borrow::Cow::{Borrowed, Owned};
+    use hash::{SipHasher, Hash, Hasher};
 
     #[test]
     fn c_to_rust() {
@@ -545,15 +546,16 @@ mod tests {
 
     #[test]
     fn equal_hash() {
-        use hash;
-
         let data = b"123\xE2\xFA\xA6\0";
         let ptr = data.as_ptr() as *const libc::c_char;
         let cstr: &'static CStr = unsafe { CStr::from_ptr(ptr) };
 
-        let cstr_hash = hash::hash::<_, hash::SipHasher>(&cstr);
-        let cstring_hash =
-            hash::hash::<_, hash::SipHasher>(&CString::new(&data[..data.len() - 1]).unwrap());
+        let mut s = SipHasher::new_with_keys(0, 0);
+        cstr.hash(&mut s);
+        let cstr_hash = s.finish();
+        let mut s = SipHasher::new_with_keys(0, 0);
+        CString::new(&data[..data.len() - 1]).unwrap().hash(&mut s);
+        let cstring_hash = s.finish();
 
         assert_eq!(cstr_hash, cstring_hash);
     }

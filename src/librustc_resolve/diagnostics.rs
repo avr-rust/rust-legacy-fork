@@ -46,7 +46,7 @@ fn f() {
 See the Declaration Statements section of the reference for more information
 about what constitutes an Item declaration and what does not:
 
-http://doc.rust-lang.org/reference.html#statements
+https://doc.rust-lang.org/reference.html#statements
 "##,
 
 E0251: r##"
@@ -201,7 +201,7 @@ struct abc;
 See the Declaration Statements section of the reference for more information
 about what constitutes an Item declaration and what does not:
 
-http://doc.rust-lang.org/reference.html#statements
+https://doc.rust-lang.org/reference.html#statements
 "##,
 
 E0317: r##"
@@ -212,7 +212,7 @@ name as an existing primitive type.
 See the Types section of the reference for more information about the primitive
 types:
 
-http://doc.rust-lang.org/reference.html#types
+https://doc.rust-lang.org/reference.html#types
 "##,
 
 E0364: r##"
@@ -241,7 +241,7 @@ pub use foo::X;
 See the 'Use Declarations' section of the reference for more information
 on this topic:
 
-http://doc.rust-lang.org/reference.html#use-declarations
+https://doc.rust-lang.org/reference.html#use-declarations
 "##,
 
 E0365: r##"
@@ -270,7 +270,7 @@ pub use foo as foo2;
 See the 'Use Declarations' section of the reference for more information
 on this topic:
 
-http://doc.rust-lang.org/reference.html#use-declarations
+https://doc.rust-lang.org/reference.html#use-declarations
 "##,
 
 E0403: r##"
@@ -397,6 +397,114 @@ impl Bar {
 ```
 "##,
 
+E0412: r##"
+An undeclared type name was used. Example of erroneous codes:
+
+```
+impl Something {} // error: use of undeclared type name `Something`
+// or:
+trait Foo {
+    fn bar(N); // error: use of undeclared type name `N`
+}
+// or:
+fn foo(x: T) {} // error: use of undeclared type name `T`
+```
+
+To fix this error, please verify you didn't misspell the type name,
+you did declare it or imported it into the scope. Examples:
+
+```
+struct Something;
+
+impl Something {} // ok!
+// or:
+trait Foo {
+    type N;
+
+    fn bar(Self::N); // ok!
+}
+//or:
+fn foo<T>(x: T) {} // ok!
+```
+"##,
+
+E0413: r##"
+A declaration shadows an enum variant or unit-like struct in scope.
+Example of erroneous code:
+
+```
+struct Foo;
+
+let Foo = 12i32; // error: declaration of `Foo` shadows an enum variant or
+                 //        unit-like struct in scope
+```
+
+
+To fix this error, rename the variable such that it doesn't shadow any enum
+variable or structure in scope. Example:
+
+```
+struct Foo;
+
+let foo = 12i32; // ok!
+```
+
+Or:
+
+```
+struct FooStruct;
+
+let Foo = 12i32; // ok!
+```
+
+The goal here is to avoid a conflict of names.
+"##,
+
+E0415: r##"
+More than one function parameter have the same name. Example of erroneous
+code:
+
+```
+fn foo(f: i32, f: i32) {} // error: identifier `f` is bound more than
+                          //        once in this parameter list
+```
+
+Please verify you didn't misspell parameters' name. Example:
+
+```
+fn foo(f: i32, g: i32) {} // ok!
+```
+"##,
+
+E0416: r##"
+An identifier is bound more than once in a pattern. Example of erroneous
+code:
+
+```
+match (1, 2) {
+    (x, x) => {} // error: identifier `x` is bound more than once in the
+                 //        same pattern
+}
+```
+
+Please verify you didn't misspell identifiers' name. Example:
+
+```
+match (1, 2) {
+    (x, y) => {} // ok!
+}
+```
+
+Or maybe did you mean to unify? Consider using a guard:
+
+```
+match (A, B, C) {
+    (x, x2, see) if x == x2 => { /* A and B are equal, do one thing */ }
+    (y, z, see) => { /* A and B unequal; do another thing */ }
+}
+```
+"##,
+
 E0417: r##"
 A static variable was referenced in a pattern. Example of erroneous code:
 
@@ -422,6 +530,55 @@ match 0 {
     FOO => {} // ok!
     _ => {}
 }
+```
+"##,
+
+E0419: r##"
+An unknown enum variant, struct or const was used. Example of
+erroneous code:
+
+```
+match 0 {
+    Something::Foo => {} // error: unresolved enum variant, struct
+                         //        or const `Foo`
+}
+```
+
+Please verify you didn't misspell it and the enum variant, struct or const has
+been declared and imported into scope. Example:
+
+```
+enum Something {
+    Foo,
+    NotFoo,
+}
+
+match Something::NotFoo {
+    Something::Foo => {} // ok!
+    _ => {}
+}
+```
+"##,
+
+E0423: r##"
+A `struct` variant name was used like a function name. Example of
+erroneous code:
+
+```
+struct Foo { a: bool};
+
+let f = Foo();
+// error: `Foo` is a struct variant name, but this expression uses
+//        it like a function name
+```
+
+Please verify you didn't misspell the name of what you actually wanted
+to use here. Example:
+
+```
+fn Foo() -> u32 { 0 }
+
+let f = Foo(); // ok!
 ```
 "##,
 
@@ -470,21 +627,29 @@ trait Foo {
         Self; // error: unresolved name `Self`
     }
 }
+
+// or:
+let x = unknown_variable;  // error: unresolved name `unknown_variable`
 ```
 
-Please verify you didn't misspell the name or that you're not using an
-invalid object. Example:
+Please verify that the name wasn't misspelled and ensure that the
+identifier being referred to is valid for the given situation. Example:
 
 ```
 enum something_that_does_exist {
     foo
 }
+
 // or:
 mod something_that_does_exist {
     pub static foo : i32 = 0i32;
 }
 
 something_that_does_exist::foo; // ok!
+
+// or:
+let unknown_variable = 12u32;
+let x = unknown_variable; // ok!
 ```
 "##,
 
@@ -582,6 +747,27 @@ use something_which_doesnt_exist;
 Please verify you didn't misspell the import's name.
 "##,
 
+E0435: r##"
+A non-constant value was used to initialise a constant. Example of erroneous
+code:
+
+```
+let foo = 42u32;
+const FOO : u32 = foo; // error: attempt to use a non-constant value in a
+                       //        constant
+```
+
+To fix this error, please replace the value with a constant. Example:
+
+```
+const FOO : u32 = 42u32; // ok!
+
+// or:
+const OTHER_FOO : u32 = 42u32;
+const FOO : u32 = OTHER_FOO; // ok!
+```
+"##,
+
 E0437: r##"
 Trait implementations can only implement associated types that are members of
 the trait in question. This error indicates that you attempted to implement
@@ -650,21 +836,12 @@ register_diagnostics! {
            // pattern #1
     E0410, // variable from pattern is not bound in pattern 1
     E0411, // use of `Self` outside of an impl or trait
-    E0412, // use of undeclared
-    E0413, // declaration of shadows an enum variant or unit-like struct in
-           // scope
     E0414, // only irrefutable patterns allowed here
-    E0415, // identifier is bound more than once in this parameter list
-    E0416, // identifier is bound more than once in the same pattern
     E0418, // is not an enum variant, struct or const
-    E0419, // unresolved enum variant, struct or const
     E0420, // is not an associated const
     E0421, // unresolved associated const
     E0422, // does not name a structure
-    E0423, // is a struct variant name, but this expression uses it like a
-           // function name
     E0427, // cannot use `ref` binding mode with ...
     E0429, // `self` imports are only allowed within a { } list
     E0434, // can't capture dynamic environment in a fn item
-    E0435, // attempt to use a non-constant value in a constant
 }

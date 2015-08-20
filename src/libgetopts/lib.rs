@@ -84,10 +84,10 @@
 #![staged_api]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/nightly/",
-       html_playground_url = "http://play.rust-lang.org/")]
+       html_root_url = "https://doc.rust-lang.org/nightly/",
+       html_playground_url = "https://play.rust-lang.org/")]
 
 #![deny(missing_docs)]
 #![feature(staged_api)]
@@ -536,16 +536,6 @@ pub fn opt(short_name: &str,
         desc: desc.to_string(),
         hasarg: hasarg,
         occur: occur
-    }
-}
-
-impl Fail {
-    /// Convert a `Fail` enum into an error string.
-    #[unstable(feature = "rustc_private")]
-    #[deprecated(since = "1.0.0",
-                 reason = "use `fmt::Display` (`{}` format specifier)")]
-    pub fn to_err_msg(self) -> String {
-        self.to_string()
     }
 }
 

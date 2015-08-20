@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[cfg(stage0)]
-use core::prelude::v1::*;
 use io::prelude::*;
 use os::windows::prelude::*;
 
@@ -571,19 +569,6 @@ pub fn set_perm(p: &Path, perm: FilePermissions) -> io::Result<()> {
         try!(cvt(c::SetFileAttributesW(p.as_ptr(), perm.attrs)));
         Ok(())
     }
-}
-
-pub fn utimes(p: &Path, atime: u64, mtime: u64) -> io::Result<()> {
-    let atime = super::ms_to_filetime(atime);
-    let mtime = super::ms_to_filetime(mtime);
-
-    let mut o = OpenOptions::new();
-    o.write(true);
-    let f = try!(File::open(p, &o));
-    try!(cvt(unsafe {
-        c::SetFileTime(f.handle.raw(), 0 as *const _, &atime, &mtime)
-    }));
-    Ok(())
 }
 
 fn get_path(f: &File) -> io::Result<PathBuf> {

@@ -15,9 +15,9 @@
 #![staged_api]
 #![crate_type = "dylib"]
 #![crate_type = "rlib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-      html_root_url = "http://doc.rust-lang.org/nightly/")]
+      html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
@@ -859,11 +859,11 @@ impl<'a, 'tcx, 'v> Visitor<'v> for PrivacyVisitor<'a, 'tcx> {
             if let ast::ViewPathList(ref prefix, ref list) = vpath.node {
                 for pid in list {
                     match pid.node {
-                        ast::PathListIdent { id, name } => {
+                        ast::PathListIdent { id, name, .. } => {
                             debug!("privacy - ident item {}", id);
                             self.check_path(pid.span, id, name.name);
                         }
-                        ast::PathListMod { id } => {
+                        ast::PathListMod { id, .. } => {
                             debug!("privacy - mod item {}", id);
                             let name = prefix.segments.last().unwrap().identifier.name;
                             self.check_path(pid.span, id, name);

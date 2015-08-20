@@ -69,9 +69,9 @@ This API is completely unstable and subject to change.
 #![staged_api]
 #![crate_type = "dylib"]
 #![crate_type = "rlib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-      html_root_url = "http://doc.rust-lang.org/nightly/")]
+      html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![allow(non_camel_case_types)]
 
@@ -332,21 +332,35 @@ pub fn check_crate(tcx: &ty::ctxt, trait_map: ty::TraitMap) {
         tcx: tcx
     };
 
-    time(time_passes, "type collecting", (), |_|
+    time(time_passes, "type collecting", ||
          collect::collect_item_types(tcx));
 
     // this ensures that later parts of type checking can assume that items
     // have valid types and not error
     tcx.sess.abort_if_errors();
 
-    time(time_passes, "variance inference", (), |_|
+    time(time_passes, "variance inference", ||
          variance::infer_variance(tcx));
 
-    time(time_passes, "coherence checking", (), |_|
+    time(time_passes, "coherence checking", ||
         coherence::check_coherence(&ccx));
 
-    time(time_passes, "type checking", (), |_|
+    time(time_passes, "wf checking (old)", ||
+        check::check_wf_old(&ccx));
+
+    time(time_passes, "item-types checking", ||
         check::check_item_types(&ccx));
+
+    time(time_passes, "item-bodies checking", ||
+        check::check_item_bodies(&ccx));
+
+    time(time_passes, "drop-impl checking", ||
+        check::check_drop_impls(&ccx));
+
+    // Do this last so that if there are errors in the old code, they
+    // get reported, and we don't get extra warnings.
+    time(time_passes, "wf checking (new)", ||
+        check::check_wf_new(&ccx));
 
     check_for_entry_fn(&ccx);
     tcx.sess.abort_if_errors();
