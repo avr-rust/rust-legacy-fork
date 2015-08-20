@@ -15,7 +15,6 @@ pub fn opts() -> TargetOptions {
     TargetOptions {
         dynamic_linking: false,
         executables: true,
-        morestack: false,
         linker_is_gnu: true,
         has_rpath: false,
         pre_link_args: vec![
