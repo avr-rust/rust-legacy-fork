@@ -326,6 +326,9 @@ declare_features! (
     // `extern "msp430-interrupt" fn()`
     (active, abi_msp430_interrupt, "1.16.0", Some(38487)),
 
+    // `extern "avr-interrupt" fn()`
+    (active, abi_avr_interrupt, "1.16.0", Some(000)),
+
     // Used to identify crates that contain sanitizer runtimes
     // rustc internal
     (active, sanitizer_runtime, "1.17.0", None),
@@ -1025,6 +1028,10 @@ impl<'a> PostExpansionVisitor<'a> {
             Abi::Msp430Interrupt => {
                 gate_feature_post!(&self, abi_msp430_interrupt, span,
                                    "msp430-interrupt ABI is experimental and subject to change");
+            },
+            Abi::AvrInterrupt | Abi::AvrNonBlockingInterrupt => {
+                gate_feature_post!(&self, abi_avr_interrupt, span,
+                                   "avr-interrupt and avr-non-blocking-interrupt ABIs are experimental and subject to change");
             },
             // Stable
             Abi::Cdecl |
