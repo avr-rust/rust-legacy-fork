@@ -92,6 +92,7 @@ pub fn llvm(build: &Build, target: &str) {
        .profile(profile)
        .define("LLVM_ENABLE_ASSERTIONS", assertions)
        .define("LLVM_TARGETS_TO_BUILD", llvm_targets)
+       .define("LLVM_EXPERIMENTAL_TARGETS_TO_BUILD", "AVR")
        .define("LLVM_INCLUDE_EXAMPLES", "OFF")
        .define("LLVM_INCLUDE_TESTS", "OFF")
        .define("LLVM_INCLUDE_DOCS", "OFF")
