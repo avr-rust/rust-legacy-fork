@@ -98,6 +98,7 @@ mod base;
 mod builder;
 mod cabi_aarch64;
 mod cabi_arm;
+mod cabi_avr;
 mod cabi_asmjs;
 mod cabi_hexagon;
 mod cabi_mips;
