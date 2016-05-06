@@ -93,7 +93,7 @@ fn main() {
     let is_crossed = target != host;
 
     let optional_components =
-        ["x86", "arm", "aarch64", "mips", "powerpc", "pnacl", "systemz", "jsbackend", "msp430",
+        ["x86", "arm", "aarch64", "avr", "mips", "powerpc", "pnacl", "systemz", "jsbackend", "msp430",
          "sparc", "nvptx"];
 
     // FIXME: surely we don't need all these components, right? Stuff like mcjit
