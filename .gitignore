@@ -101,3 +101,9 @@ version.ml
 version.texi
 .cargo
 !src/vendor/**
+
+# My builds
+build-release/
+debug-release/
+debug/
+release/
