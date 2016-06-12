@@ -100,3 +100,8 @@ version.md
 version.ml
 version.texi
 .cargo
+
+# My builds
+debug-release/
+debug/
+release/
