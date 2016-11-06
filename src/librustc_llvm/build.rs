@@ -144,6 +144,8 @@ fn main() {
         cfg.flag("-DLLVM_RUSTLLVM");
     }
 
+    cfg.flag("-g");
+
     println!("cargo:rerun-if-changed=../rustllvm/PassWrapper.cpp");
     println!("cargo:rerun-if-changed=../rustllvm/RustWrapper.cpp");
     println!("cargo:rerun-if-changed=../rustllvm/ArchiveWrapper.cpp");
