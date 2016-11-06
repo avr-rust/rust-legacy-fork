@@ -151,6 +151,8 @@ fn main() {
     }
 
     build_helper::rerun_if_changed_anything_in_dir(Path::new("../rustllvm"));
+    cfg.flag("-g");
+
     cfg.file("../rustllvm/PassWrapper.cpp")
        .file("../rustllvm/RustWrapper.cpp")
        .file("../rustllvm/ArchiveWrapper.cpp")
