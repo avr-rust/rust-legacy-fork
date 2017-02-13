@@ -79,7 +79,7 @@ pub fn llvm(build: &Build, target: &str) {
     // NOTE: remember to also update `config.toml.example` when changing the defaults!
     let llvm_targets = match build.config.llvm_targets {
         Some(ref s) => s,
-        None => "X86;ARM;AArch64;AVR;Mips;PowerPC;SystemZ;JSBackend;MSP430;Sparc;NVPTX",
+        None => "X86;ARM;AArch64;Mips;PowerPC;SystemZ;JSBackend;MSP430;Sparc;NVPTX",
     };
 
     cfg.target(target)
@@ -88,6 +88,7 @@ pub fn llvm(build: &Build, target: &str) {
        .profile(profile)
        .define("LLVM_ENABLE_ASSERTIONS", assertions)
        .define("LLVM_TARGETS_TO_BUILD", llvm_targets)
+       .define("LLVM_EXPERIMENTAL_TARGETS_TO_BUILD", "AVR")
        .define("LLVM_INCLUDE_EXAMPLES", "OFF")
        .define("LLVM_INCLUDE_TESTS", "OFF")
        .define("LLVM_INCLUDE_DOCS", "OFF")

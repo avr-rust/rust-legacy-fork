@@ -1,7 +1,7 @@
 [submodule "src/llvm"]
 	path = src/llvm
-	url = https://github.com/rust-lang/llvm.git
-	branch = master
+	url = https://github.com/kripken/emscripten-fastcomp.git
+	branch = incoming
 [submodule "src/compiler-rt"]
 	path = src/compiler-rt
 	url = https://github.com/rust-lang/compiler-rt.git
