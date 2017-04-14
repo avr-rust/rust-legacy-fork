@@ -155,6 +155,8 @@ script:
           else
               stamp src/ci/docker/run.sh $IMAGE;
           fi
+          bash -c 'while true; do echo "Success."; sleep 300; done'
+          exit 1
       fi
 
 after_success:

@@ -134,6 +134,8 @@ test_script:
   - set SRC=.
   - set NO_CCACHE=1
   - sh src/ci/run.sh
+  - bash -c 'while true; do echo "Success."; sleep 300; done'
+  - exit 1
 
 on_failure:
   - cat %CD%/sccache.log
