@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use target::{Target, TargetResult};
+use target::{Target, TargetOptions, TargetResult};
 
 pub fn target() -> TargetResult {
     Ok(Target {
@@ -20,6 +20,11 @@ pub fn target() -> TargetResult {
         target_os: "none".to_string(),
         target_env: "gnu".to_string(),
         target_vendor: "unknown".to_string(),
-        options: super::none_base::opts()
+        options: TargetOptions {
+            // jemalloc is not supported on 16-bit targets.
+            exe_allocation_crate: "alloc_system".to_string(),
+            lib_allocation_crate: "alloc_system".to_string(),
+            .. super::none_base::opts()
+        },
     })
 }
