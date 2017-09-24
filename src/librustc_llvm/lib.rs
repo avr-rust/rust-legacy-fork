@@ -24,6 +24,9 @@
 #![feature(link_args)]
 #![feature(static_nobundle)]
 
+// Workaround for rust-lang/rust#39880
+#[link(name = "ffi")] extern {}
+
 // See librustc_cratesio_shim/Cargo.toml for a comment explaining this.
 #[allow(unused_extern_crates)]
 extern crate rustc_cratesio_shim;
