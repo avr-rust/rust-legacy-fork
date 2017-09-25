@@ -63,7 +63,7 @@
 # on them will not work unless the user opts in to building them. Possible
 # experimental LLVM targets include WebAssembly for the
 # wasm32-experimental-emscripten Rust target.
-#experimental-targets = ""
+#experimental-targets = "AVR"
 
 # Cap the number of parallel linker invocations when compiling LLVM.
 # This can be useful when building LLVM with debug info, which significantly

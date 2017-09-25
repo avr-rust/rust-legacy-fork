@@ -788,6 +788,7 @@ pub mod consts {
     /// - x86_64
     /// - arm
     /// - aarch64
+    /// - avr
     /// - mips
     /// - mips64
     /// - powerpc
@@ -898,6 +899,11 @@ mod arch {
 #[cfg(target_arch = "aarch64")]
 mod arch {
     pub const ARCH: &'static str = "aarch64";
+}
+
+#[cfg(target_arch = "avr")]
+mod arch {
+    pub const ARCH: &'static str = "avr";
 }
 
 #[cfg(target_arch = "mips")]
