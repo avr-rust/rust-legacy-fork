@@ -25,6 +25,10 @@ fully-fledged cross-compiler, however, as it does not compile any libraries
 such as `libcore` or `liblibc`. To do this, the `--target=avr-unknown-unknown`
 flag must be passed to `configure`, which is not fully supported yet due to bugs.
 
+First make sure you've installed all dependencies for building, as specified in
+the main Rust repository [here](https://github.com/rust-lang/rust/#building-from-source).
+Then use the following commands:
+
 ``` bash
 # Grab the avr-rust sources
 git clone https://github.com/avr-rust/rust.git
